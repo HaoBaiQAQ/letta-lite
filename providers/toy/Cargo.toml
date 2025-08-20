@@ -1,0 +1,12 @@
+[package]
+name = "letta-provider-toy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+letta-core = { path = "../../core" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true

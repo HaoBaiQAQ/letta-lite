@@ -1,0 +1,30 @@
+[package]
+name = "letta-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+base64.workspace = true
+
+# Local dependencies
+letta-storage = { path = "../storage" }
+
+# Memory and templating
+tera = "1.20"
+regex = "1.10"
+lazy_static = "1.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+pretty_assertions = "1.4"

@@ -1,0 +1,16 @@
+[package]
+name = "letta-provider-llama"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+letta-core = { path = "../../core" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc = "0.2"
+
+# We'll use llama-cpp-rs when available
+# For now, this is a stub

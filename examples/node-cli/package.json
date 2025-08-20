@@ -1,0 +1,30 @@
+{
+  "name": "letta-lite-cli",
+  "version": "0.1.0",
+  "description": "CLI for testing Letta Lite",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "demo": "npm run build && node dist/index.js demo",
+    "interactive": "npm run build && node dist/index.js interactive",
+    "test": "npm run build && node dist/index.js test"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.0.0",
+    "inquirer": "^9.2.0",
+    "ora": "^7.0.0",
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/ffi-napi": "^4.0.0",
+    "@types/inquirer": "^9.0.0",
+    "@types/node": "^20.0.0",
+    "@types/ref-napi": "^3.0.0",
+    "tsx": "^3.14.0",
+    "typescript": "^5.2.0"
+  }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "letta-sync"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Local deps
+letta-core = { path = "../core" }
+letta-storage = { path = "../storage" }
