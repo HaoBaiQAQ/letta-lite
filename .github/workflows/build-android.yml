@@ -8,7 +8,7 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装基础编译工具（编译OpenSSL源码必需）
+      - name: 安装基础编译工具（OpenSSL源码编译必需）
         run: sudo apt-get update && sudo apt-get install -y make gcc perl
 
       - name: 安装Rust环境（1.85.0支持edition2024）
@@ -26,15 +26,13 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译安卓包（环境变量强制OpenSSL源码编译）
+      - name: 编译安卓包（强制OpenSSL源码编译，解决openssl-sys报错）
         run: |
-          # 关键：OPENSSL_VENDORED=1 是openssl-sys官方指定的源码编译开关
-          export OPENSSL_VENDORED=1
-          # 确保交叉编译时使用NDK工具链
-          export CC=aarch64-linux-android-gcc
-          export AR=aarch64-linux-android-ar
-          # 用cargo-ndk编译，适配安卓架构
-          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
+          # 关键：组合环境变量，强制openssl-sys 0.9.111从源码编译
+          OPENSSL_VENDORED=1 \
+          RUSTFLAGS="--cfg openssl_vendored -C linker=aarch64-linux-android-gcc" \
+          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile \
+            --no-default-features --features "vendored-openssl"
 
       - name: 上传编译产物
         uses: actions/upload-artifact@v4
