@@ -8,27 +8,27 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装终极依赖工具链（单行命令，无空格问题）
+      - name: 安装终极依赖工具链（单行命令无空格）
         run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
 
-      - name: 手动下载并配置OpenSSL源码（彻底绕开cargo依赖）
+      - name: 手动下载并配置OpenSSL源码（修复NDK编译器）
         run: |
-          # 下载与openssl-sys 0.9.111兼容的OpenSSL 1.1.1w源码
+          # 下载OpenSSL 1.1.1w源码
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
-          # 配置安卓交叉编译（指定NDK工具链）
+          # 配置NDK工具链（用Clang，不是gcc，适配r23c）
           export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
           export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
           export API=24
+          # 关键修复：用NDK自带的Clang编译器（r23c没有gcc）
           export CC=$TOOLCHAIN/bin/$TARGET$API-clang
           export AR=$TOOLCHAIN/bin/$TARGET-ar
           export RANLIB=$TOOLCHAIN/bin/$TARGET-ranlib
           export STRIP=$TOOLCHAIN/bin/$TARGET-strip
-          # 配置OpenSSL编译（静态库，禁用shared）
+          # 配置OpenSSL编译（适配Clang）
           ./Configure android-arm64 -D__ANDROID_API__=$API --prefix=$GITHUB_WORKSPACE/openssl-android --openssldir=$GITHUB_WORKSPACE/openssl-android no-shared no-dso no-ssl3 no-tls1 no-tls1_1 no-zlib
-          # 编译并安装到指定目录
           make -j$(nproc)
           make install
           cd .. && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
@@ -50,20 +50,17 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译安卓包（直接指向手动编译的OpenSSL）
+      - name: 编译安卓包（用Clang编译器，适配NDK）
         run: |
-          # 关键：告诉openssl-sys直接使用手动编译好的安卓版OpenSSL
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
           export OPENSSL_INCLUDE_DIR=$OPENSSL_DIR/include
           export OPENSSL_LIB_DIR=$OPENSSL_DIR/lib
-          # 禁用pkg-config，避免干扰
           export PKG_CONFIG=false
-          # 明确交叉编译工具链
-          export CC=aarch64-linux-android-gcc
-          export AR=aarch64-linux-android-ar
+          # 关键修复：RUSTFLAGS也用Clang，不是gcc
+          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
+          export AR=$TOOLCHAIN/bin/$TARGET-ar
           export NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
-          export RUSTFLAGS="-C linker=aarch64-linux-android-gcc -C ar=aarch64-linux-android-ar"
-          # 执行编译（直接使用手动编译的OpenSSL，无需源码编译）
+          export RUSTFLAGS="-C linker=$TOOLCHAIN/bin/$TARGET$API-clang -C ar=$TOOLCHAIN/bin/$TARGET-ar"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传编译产物
