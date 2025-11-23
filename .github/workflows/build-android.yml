@@ -1,66 +1,47 @@
-name: 官方稳定版（无搜索+无404）
+name: 按你要求的最终版（取消遍历+锁定r25c）
 on: [workflow_dispatch]
 jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取仓库源码
+      - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装必需依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
+      - name: 装依赖
+        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
 
-      - name: 安装官方稳定NDK（r25c，100%可下载）
+      - name: 锁定安装NDK r25c（不换版本）
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r25c  # 官方公开版本，不会404
+          ndk-version: r25c
           add-to-path: true
 
-      - name: 编译OpenSSL（硬编码官方路径+禁用gcc检查）
+      - name: 只搜r25c目录找Clang（不全局遍历）
         run: |
-          # NDK r25c的官方标准路径（固定格式，100%存在）
-          CLANG_PATH="/usr/local/lib/android/sdk/ndk/r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          AR_PATH="/usr/local/lib/android/sdk/ndk/r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-          
-          # 下载并解压OpenSSL源码
-          wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
-          tar -zxf openssl-1.1.1w.tar.gz
-          cd openssl-1.1.1w
-          
-          # 明确指定工具，禁用gcc检查
-          export CC=$CLANG_PATH
-          export AR=$AR_PATH
-          export CFLAGS="-D__ANDROID_API__=24"
-          
-          # 验证工具可用性
-          echo "✅ 验证Clang："
-          $CC --version
-          echo "✅ 验证llvm-ar："
-          $AR --version
-          
-          # 配置OpenSSL，禁用依赖gcc的特性
-          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl-android no-shared no-zlib no-asm
-          make -j2
-          make install
-          cd .. && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
-          echo "✅ OpenSSL编译完成！"
+          CLANG=$(find /usr/local/lib/android/sdk/ndk/r25c/ -name "aarch64-linux-android-clang" -type f | head -1)
+          echo "CLANG=$CLANG" >> $GITHUB_ENV
+          echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 安装Rust环境
+      - name: 编译OpenSSL
+        run: |
+          wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
+          export CC=$CLANG AR=$AR CFLAGS="-D__ANDROID_API__=24"
+          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl no-shared no-zlib no-asm
+          make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
+
+      - name: 装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
-
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version 3.5.4 --locked
+      - run: cargo install cargo-ndk --version 3.5.4 --locked
 
       - name: 编译项目
         run: |
-          export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
-          export PKG_CONFIG=false
-          export RUSTFLAGS="-C linker=$CLANG_PATH"
+          export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
+          export RUSTFLAGS="-C linker=$CLANG"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
-          echo "✅ 项目编译完成！"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
