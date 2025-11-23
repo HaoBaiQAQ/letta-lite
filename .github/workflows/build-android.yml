@@ -8,11 +8,17 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装系统依赖（交叉编译OpenSSL所需）
+      - name: 配置系统多架构（添加arm64支持）
         run: |
-          sudo apt-get update
-          # 安装安卓交叉编译用的OpenSSL开发包和pkg-config
-          sudo apt-get install -y libssl-dev:arm64 pkg-config-aarch64-linux-gnu
+          # 启用多架构支持
+          sudo dpkg --add-architecture arm64
+          # 更新软件源（同步arm64包信息）
+          sudo apt-get update -y
+          # 安装交叉编译基础工具链+OpenSSL依赖
+          sudo apt-get install -y \
+            crossbuild-essential-arm64 \
+            libssl-dev:arm64 \
+            pkg-config
 
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
@@ -31,14 +37,17 @@ jobs:
       - name: 运行仓库自带的安卓编译脚本（指定交叉编译环境）
         run: |
           chmod +x scripts/build-android.sh
-          # 设置环境变量：指定交叉编译的pkg-config，启用OpenSSL静态链接
-          export PKG_CONFIG=aarch64-linux-gnu-pkg-config
+          # 配置交叉编译环境变量
+          export PKG_CONFIG="pkg-config --target=aarch64-linux-android"
           export OPENSSL_STATIC=1
           export OPENSSL_DIR=/usr/aarch64-linux-gnu
+          export CC=aarch64-linux-gnu-gcc # 指定安卓交叉编译器
           ./scripts/build-android.sh
 
       - name: 上传编译好的安卓包
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
-          path: ./target/android/ # 编译后的APK路径
+          path: |
+            ./target/android/
+            ./target/aarch64-linux-android/mobile/ # 额外兼容脚本可能输出的路径
