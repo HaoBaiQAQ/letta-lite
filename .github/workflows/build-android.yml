@@ -8,9 +8,8 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装终极依赖工具链（修复空格问题）
-        run: sudo apt-get update && sudo apt-get install -y \
-          make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
+      - name: 安装终极依赖工具链（单行命令，无空格问题）
+        run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
 
       - name: 手动下载并配置OpenSSL源码（彻底绕开cargo依赖）
         run: |
@@ -28,10 +27,7 @@ jobs:
           export RANLIB=$TOOLCHAIN/bin/$TARGET-ranlib
           export STRIP=$TOOLCHAIN/bin/$TARGET-strip
           # 配置OpenSSL编译（静态库，禁用shared）
-          ./Configure android-arm64 -D__ANDROID_API__=$API \
-            --prefix=$GITHUB_WORKSPACE/openssl-android \
-            --openssldir=$GITHUB_WORKSPACE/openssl-android \
-            no-shared no-dso no-ssl3 no-tls1 no-tls1_1 no-zlib
+          ./Configure android-arm64 -D__ANDROID_API__=$API --prefix=$GITHUB_WORKSPACE/openssl-android --openssldir=$GITHUB_WORKSPACE/openssl-android no-shared no-dso no-ssl3 no-tls1 no-tls1_1 no-zlib
           # 编译并安装到指定目录
           make -j$(nproc)
           make install
