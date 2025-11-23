@@ -18,8 +18,8 @@ jobs:
         with:
           ndk-version: r23c
 
-      - name: 安装兼容版本的cargo-ndk（适配Rust 1.75.0）
-        run: cargo install cargo-ndk --version 3.5.4
+      - name: 安装兼容版本的cargo-ndk（加--locked强制用锁定依赖）
+        run: cargo install cargo-ndk --version 3.5.4 --locked
 
       - name: 运行仓库自带的安卓编译脚本
         run: |
