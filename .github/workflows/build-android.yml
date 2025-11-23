@@ -8,26 +8,37 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装Rust环境（升级到1.85.0支持edition2024）
+      - name: 安装系统依赖（交叉编译OpenSSL所需）
+        run: |
+          sudo apt-get update
+          # 安装安卓交叉编译用的OpenSSL开发包和pkg-config
+          sudo apt-get install -y libssl-dev:arm64 pkg-config-aarch64-linux-gnu
+
+      - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
+          target: aarch64-linux-android # 提前安装安卓目标架构
 
       - name: 安装Android NDK（项目要求的23+）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
 
-      - name: 安装兼容版本的cargo-ndk（加--locked强制用锁定依赖）
+      - name: 安装兼容版本的cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 运行仓库自带的安卓编译脚本
+      - name: 运行仓库自带的安卓编译脚本（指定交叉编译环境）
         run: |
-          chmod +x scripts/build-android.sh # 给脚本加执行权限
-          ./scripts/build-android.sh # 调用仓库里的安卓编译脚本
+          chmod +x scripts/build-android.sh
+          # 设置环境变量：指定交叉编译的pkg-config，启用OpenSSL静态链接
+          export PKG_CONFIG=aarch64-linux-gnu-pkg-config
+          export OPENSSL_STATIC=1
+          export OPENSSL_DIR=/usr/aarch64-linux-gnu
+          ./scripts/build-android.sh
 
       - name: 上传编译好的安卓包
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
-          path: ./target/android/ # 仓库脚本编译好的APK会存在这里
+          path: ./target/android/ # 编译后的APK路径
