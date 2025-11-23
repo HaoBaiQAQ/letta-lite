@@ -8,9 +8,34 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需工具（含pkg-config交叉编译支持）
+      - name: 安装终极依赖工具链
         run: sudo apt-get update && sudo apt-get install -y \
-          make gcc perl crossbuild-essential-arm64 pkg-config
+          make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
+
+      - name: 手动下载并配置OpenSSL源码（彻底绕开cargo依赖）
+        run: |
+          # 下载与openssl-sys 0.9.111兼容的OpenSSL 1.1.1w源码
+          wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          tar -zxf openssl-1.1.1w.tar.gz
+          cd openssl-1.1.1w
+          # 配置安卓交叉编译（指定NDK工具链）
+          export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
+          export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=24
+          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
+          export AR=$TOOLCHAIN/bin/$TARGET-ar
+          export RANLIB=$TOOLCHAIN/bin/$TARGET-ranlib
+          export STRIP=$TOOLCHAIN/bin/$TARGET-strip
+          # 配置OpenSSL编译（静态库，禁用shared）
+          ./Configure android-arm64 -D__ANDROID_API__=$API \
+            --prefix=$GITHUB_WORKSPACE/openssl-android \
+            --openssldir=$GITHUB_WORKSPACE/openssl-android \
+            no-shared no-dso no-ssl3 no-tls1 no-tls1_1 no-zlib
+          # 编译并安装到指定目录
+          make -j$(nproc)
+          make install
+          cd .. && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
 
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
@@ -18,7 +43,7 @@ jobs:
           toolchain: 1.85.0
           target: aarch64-linux-android
 
-      - name: 安装Android NDK（r23c，固定路径）
+      - name: 安装Android NDK（固定路径）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
@@ -26,34 +51,23 @@ jobs:
         env:
           NDK_ROOT: /usr/local/lib/android/sdk/ndk/23.2.8568313
 
-      - name: 安装cargo-ndk和cargo-edit（用于修改依赖特性）
-        run: |
-          cargo install cargo-ndk --version 3.5.4 --locked
-          cargo install cargo-edit # 用于cargo add修改依赖特性
+      - name: 安装cargo-ndk
+        run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 强制修改openssl-sys依赖，启用vendored特性
+      - name: 编译安卓包（直接指向手动编译的OpenSSL）
         run: |
-          # 进入项目根目录（确保Cargo.toml存在）
-          cd $GITHUB_WORKSPACE
-          # 强制给openssl-sys添加vendored特性，覆盖所有依赖的版本
-          cargo add openssl-sys@0.9.111 --features vendored
-          # 强制指定兼容的openssl-src版本（源码编译核心）
-          cargo add openssl-src@111.25.0+1.1.1w
-
-      - name: 编译安卓包（终极环境变量+依赖特性双重保障）
-        run: |
-          cd $GITHUB_WORKSPACE
-          # 禁用pkg-config查找，强制使用vendored源码
+          # 关键：告诉openssl-sys直接使用手动编译好的安卓版OpenSSL
+          export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
+          export OPENSSL_INCLUDE_DIR=$OPENSSL_DIR/include
+          export OPENSSL_LIB_DIR=$OPENSSL_DIR/lib
+          # 禁用pkg-config，避免干扰
           export PKG_CONFIG=false
           # 明确交叉编译工具链
           export CC=aarch64-linux-android-gcc
           export AR=aarch64-linux-android-ar
           export NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
-          # 强制启用源码编译，禁用系统依赖
-          export OPENSSL_VENDORED=1
-          export OPENSSL_STATIC=1
           export RUSTFLAGS="-C linker=aarch64-linux-android-gcc -C ar=aarch64-linux-android-ar"
-          # 执行编译
+          # 执行编译（直接使用手动编译的OpenSSL，无需源码编译）
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传编译产物
