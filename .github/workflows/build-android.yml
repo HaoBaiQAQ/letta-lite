@@ -11,30 +11,45 @@ jobs:
       - name: 安装基础编译工具（OpenSSL源码编译必需）
         run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64
 
+      - name: 配置Rust交叉编译环境（创建.cargo/config.toml）
+        run: |
+          # 手动创建cargo配置文件，强制openssl-sys从源码编译
+          mkdir -p .cargo
+          cat > .cargo/config.toml << EOF
+          [target.aarch64-linux-android]
+          linker = "aarch64-linux-android-gcc"
+          ar = "aarch64-linux-android-ar"
+
+          # 强制openssl-sys使用openssl-src源码编译，绕开pkg-config
+          [patch.crates-io]
+          openssl-sys = { version = "0.9.111", features = ["vendored"] }
+          openssl-src = "111.25.0+1.1.1w" # 与openssl-sys 0.9.111兼容的源码版本
+          EOF
+
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
 
-      - name: 安装Android NDK（r23c，添加到路径）
+      - name: 安装Android NDK（r23c，配置环境变量）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
           add-to-path: true
+        env:
+          NDK_ROOT: /usr/local/lib/android/sdk/ndk/23.2.8568313 # NDK默认安装路径
 
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译安卓包（纯环境变量强制OpenSSL源码编译）
+      - name: 编译安卓包（强制源码编译OpenSSL）
         run: |
-          # 核心环境变量组合，针对openssl-sys 0.9.111专属生效
+          # 最终环境变量保障
           export OPENSSL_VENDORED=1
           export OPENSSL_STATIC=1
-          export RUSTFLAGS="-C linker=aarch64-linux-android-gcc -C ar=aarch64-linux-android-ar"
-          export CC=aarch64-linux-android-gcc
-          export AR=aarch64-linux-android-ar
-          # 去掉所有无效特性参数，仅保留编译核心配置
+          export NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
+          # 直接编译，依赖由.cargo/config.toml强制控制
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传编译产物
