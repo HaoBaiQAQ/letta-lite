@@ -1,0 +1,30 @@
+name: 自动编译Letta-Lite安卓包
+on: [workflow_dispatch] # 手动触发编译
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取仓库源码
+        uses: actions/checkout@v4
+
+      - name: 安装Rust环境（匹配项目要求的1.75+）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.75.0
+
+      - name: 安装Android NDK（项目要求的23+）
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r23c
+
+      - name: 运行仓库自带的安卓编译脚本
+        run: |
+          chmod +x scripts/build-android.sh # 给脚本加执行权限
+          ./scripts/build-android.sh # 调用仓库里的安卓编译脚本
+
+      - name: 上传编译好的安卓包
+        uses: actions/upload-artifact@v4
+        with:
+          name: letta-lite安卓包
+          path: ./target/android/ # 仓库脚本编译好的APK会存在这里
