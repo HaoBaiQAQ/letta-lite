@@ -8,10 +8,10 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装Rust环境（匹配项目要求的1.75+）
+      - name: 安装Rust环境（升级到1.78.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.75.0
+          toolchain: 1.78.0
 
       - name: 安装Android NDK（项目要求的23+）
         uses: nttld/setup-ndk@v1
