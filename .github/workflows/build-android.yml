@@ -1,4 +1,4 @@
-name: 按你要求的最终版（取消遍历+锁定r25c）
+name: 绝杀版（彻底禁用gcc检查）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -10,24 +10,38 @@ jobs:
       - name: 装依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
 
-      - name: 锁定安装NDK r25c（不换版本）
+      - name: 锁定NDK r25c（不换版本）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 只搜r25c目录找Clang（不全局遍历）
+      - name: 精准搜r25c的Clang（不全局遍历）
         run: |
           CLANG=$(find /usr/local/lib/android/sdk/ndk/r25c/ -name "aarch64-linux-android-clang" -type f | head -1)
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 编译OpenSSL
+      - name: 编译OpenSSL（彻底骗过大gcc检查）
         run: |
+          # 下载解压
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
-          export CC=$CLANG AR=$AR CFLAGS="-D__ANDROID_API__=24"
-          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl no-shared no-zlib no-asm
+          
+          # 强制指定所有编译器为Clang，告诉OpenSSL是交叉编译
+          export CC=$CLANG
+          export CXX=$(dirname $CLANG)/aarch64-linux-android-clang++
+          export AR=$AR
+          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
+          export LDFLAGS="-fPIC"
+          
+          # 核心参数：--cross-compile-prefix 明确交叉编译，禁用gcc检查
+          ./Configure android-arm64 \
+            --prefix=$GITHUB_WORKSPACE/openssl \
+            --cross-compile-prefix=aarch64-linux-android- \
+            no-shared no-zlib no-asm no-comp no-dso no-engine
+          
+          # 编译安装
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
 
       - name: 装Rust和cargo-ndk
@@ -40,7 +54,7 @@ jobs:
       - name: 编译项目
         run: |
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
-          export RUSTFLAGS="-C linker=$CLANG"
+          export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
