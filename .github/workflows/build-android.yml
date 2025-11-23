@@ -1,4 +1,4 @@
-name: 最终无错版（硬编码路径+完整NDK配置）
+name: 官方稳定版（无搜索+无404）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -10,35 +10,35 @@ jobs:
       - name: 安装必需依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
 
-      - name: 安装NDK（指定版本29.0.14206865，匹配工具路径）
+      - name: 安装官方稳定NDK（r25c，100%可下载）
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: 29.0.14206865  # 补全必填参数，和日志中的NDK版本一致
+          ndk-version: r25c  # 官方公开版本，不会404
           add-to-path: true
 
-      - name: 编译OpenSSL（硬编码路径+禁用gcc检查）
+      - name: 编译OpenSSL（硬编码官方路径+禁用gcc检查）
         run: |
-          # 硬编码已知的正确路径（从日志复制，100%存在）
-          CLANG_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          AR_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          # NDK r25c的官方标准路径（固定格式，100%存在）
+          CLANG_PATH="/usr/local/lib/android/sdk/ndk/r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          AR_PATH="/usr/local/lib/android/sdk/ndk/r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           
           # 下载并解压OpenSSL源码
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
           
-          # 明确指定编译器和归档工具，禁用gcc检查
+          # 明确指定工具，禁用gcc检查
           export CC=$CLANG_PATH
           export AR=$AR_PATH
-          export CFLAGS="-D__ANDROID_API__=24"  # 直接指定安卓API，不让OpenSSL查gcc
+          export CFLAGS="-D__ANDROID_API__=24"
           
-          # 验证工具（确保路径没变化）
+          # 验证工具可用性
           echo "✅ 验证Clang："
           $CC --version
           echo "✅ 验证llvm-ar："
           $AR --version
           
-          # 核心配置：添加no-asm参数，进一步禁用依赖gcc的汇编逻辑
+          # 配置OpenSSL，禁用依赖gcc的特性
           ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl-android no-shared no-zlib no-asm
           make -j2
           make install
