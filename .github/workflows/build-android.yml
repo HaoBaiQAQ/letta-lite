@@ -1,4 +1,4 @@
-name: 自动编译Letta-Lite安卓包
+name: 自动编译Letta-Lite安卓包（主方案+替补方案）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,19 +7,22 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装依赖工具链
-        run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
+      - name: 安装通用依赖工具链
+        run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64 pkg-config wget unzip curl
 
-      - name: 手动编译OpenSSL（NDK Clang适配版）
+      - name: 主方案：纯Clang手动编译OpenSSL（优先尝试）
+        id: main_build_openssl
         run: |
+          set -e
+          # 下载OpenSSL源码
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
+          # 配置NDK Clang（零gcc痕迹）
           export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
           export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
           export API=24
-          # 强制使用NDK自带Clang，彻底抛弃gcc
           export CC=$TOOLCHAIN/bin/$TARGET$API-clang
           export AR=$TOOLCHAIN/bin/$TARGET-ar
           export RANLIB=$TOOLCHAIN/bin/$TARGET-ranlib
@@ -29,6 +32,19 @@ jobs:
           make -j$(nproc)
           make install
           cd .. && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
+          # 标记主方案成功
+          echo "OPENSSL_BUILT=true" >> $GITHUB_ENV
+
+      - name: 替补方案：下载预编译安卓OpenSSL库（主方案失败时自动执行）
+        if: failure() && steps.main_build_openssl.outcome == 'failure'
+        run: |
+          # 下载现成的安卓aarch64 OpenSSL静态库（兼容openssl-sys 0.9.111）
+          curl -L https://github.com/kruton/openssl-android-prebuilt/raw/master/openssl-1.1.1w-android-aarch64.tar.gz -o openssl-prebuilt.tar.gz
+          tar -zxf openssl-prebuilt.tar.gz -C $GITHUB_WORKSPACE
+          mv $GITHUB_WORKSPACE/openssl-1.1.1w-android-aarch64 $GITHUB_WORKSPACE/openssl-android
+          rm -rf openssl-prebuilt.tar.gz
+          # 标记替补方案成功
+          echo "OPENSSL_BUILT=true" >> $GITHUB_ENV
 
       - name: 安装Rust环境
         uses: dtolnay/rust-toolchain@stable
@@ -36,7 +52,7 @@ jobs:
           toolchain: 1.85.0
           target: aarch64-linux-android
 
-      - name: 安装NDK
+      - name: 安装NDK（固定路径）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
@@ -47,21 +63,26 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目
+      - name: 编译项目（自动适配主/替补方案的OpenSSL）
+        if: env.OPENSSL_BUILT == 'true'
         run: |
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
           export OPENSSL_INCLUDE_DIR=$OPENSSL_DIR/include
           export OPENSSL_LIB_DIR=$OPENSSL_DIR/lib
           export PKG_CONFIG=false
+          # 配置Clang工具链（零gcc）
+          export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
           export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
           export API=24
           export CC=$TOOLCHAIN/bin/$TARGET$API-clang
           export AR=$TOOLCHAIN/bin/$TARGET-ar
           export RUSTFLAGS="-C linker=$TOOLCHAIN/bin/$TARGET$API-clang -C ar=$TOOLCHAIN/bin/$TARGET-ar"
+          # 执行编译
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
-      - name: 上传产物
+      - name: 上传编译产物
+        if: env.OPENSSL_BUILT == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
