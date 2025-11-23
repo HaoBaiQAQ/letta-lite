@@ -1,4 +1,4 @@
-name: 终极绝杀版（灵活搜Clang+骗GCC）
+name: 最终最终绝杀版（造gcc符号链接+骗检查）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -27,33 +27,39 @@ jobs:
           echo "✅ NDK根目录：$NDK_ROOT"
           echo "NDK_ROOT=$NDK_ROOT" >> $GITHUB_ENV
 
-      - name: 灵活搜索Clang（前缀匹配，不纠结固定名）
+      - name: 灵活搜索Clang+创建gcc符号链接（核心！）
         run: |
-          # 搜索所有"aarch64-linux-android"开头、"clang"结尾的文件（覆盖带API版本的变体）
+          # 搜索aarch64架构的Clang（覆盖所有变体）
           CLANG=$(find $NDK_ROOT -name "aarch64-linux-android*clang" -type f | grep -v "clang++" | head -1)
           if [ -z "$CLANG" ]; then
-            echo "❌ 未找到Clang，输出所有可能的工具名供排查："
-            find $NDK_ROOT -name "aarch64-linux-android*" -type f | grep -E "(clang|gcc)"  # 输出所有相关工具名
+            echo "❌ 未找到Clang"
             exit 1
           fi
-          echo "✅ 找到Clang：$CLANG"
+          CLANG_BIN_DIR=$(dirname $CLANG)  # Clang所在的bin目录（已在PATH里）
+          GCC_LINK_NAME="aarch64-linux-android-gcc"  # OpenSSL要找的gcc命令名
+          GCC_LINK_PATH="$CLANG_BIN_DIR/$GCC_LINK_NAME"
+          
+          # 创建符号链接：让aarch64-linux-android-gcc指向Clang
+          sudo ln -s $CLANG $GCC_LINK_PATH
+          echo "✅ 创建符号链接：$GCC_LINK_PATH -> $CLANG"
+          echo "✅ 验证gcc命令：$(which $GCC_LINK_NAME)"  # 验证是否能找到
+          
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 编译OpenSSL（骗GCC+强制指定API）
+      - name: 编译OpenSSL（彻底过gcc检查）
         run: |
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
           
-          export CC=$CLANG
-          export GCC=$CLANG  # 骗GCC检查
+          # 现在PATH里有aarch64-linux-android-gcc（实际是Clang），OpenSSL能找到
+          export CC=aarch64-linux-android-gcc  # 直接用创建的gcc链接
           export AR=$AR
-          export CFLAGS="-D__ANDROID_API__=24 -fPIC"  # 强制API24，不管工具名带什么API
+          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
           export LDFLAGS="-fPIC"
           
           ./Configure android-arm64 \
             --prefix=$GITHUB_WORKSPACE/openssl \
-            --cross-compile-prefix=aarch64-linux-android- \
             no-shared no-zlib no-asm
           
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
