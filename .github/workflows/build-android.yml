@@ -8,31 +8,36 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
+      - name: 安装基础依赖（编译OpenSSL源码需要）
+        run: sudo apt-get update && sudo apt-get install -y make gcc
+
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
 
-      - name: 安装Android NDK（r23c，项目要求）
+      - name: 安装Android NDK（r23c，必须添加到路径）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
-          add-to-path: true # 自动添加NDK到环境变量
+          add-to-path: true
 
-      - name: 安装cargo-ndk（安卓编译工具）
+      - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译安卓包（用cargo-ndk直接编译，绕开系统OpenSSL）
+      - name: 编译安卓包（强制源码编译OpenSSL）
         run: |
-          # 关键：让openssl-sys自动下载安卓版OpenSSL，不用系统库
-          export OPENSSL_NO_VENDOR=0
-          export OPENSSL_STATIC=1
-          # 用cargo-ndk编译，自动适配NDK和目标架构
-          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
+          # 关键：启用vendored特性，让openssl-sys从源码编译OpenSSL
+          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile \
+            --features openssl-sys/vendored
+          # 兼容项目可能的依赖传递，显式指定特性
+          export RUSTFLAGS="--cfg openssl_vendored"
 
       - name: 上传编译产物
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
-          path: target/android/*.so # 编译后的安卓库文件（项目核心产物）
+          path: |
+            target/android/*.so
+            target/aarch64-linux-android/mobile/*.so
