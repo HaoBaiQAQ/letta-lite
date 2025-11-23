@@ -1,4 +1,4 @@
-name: 绝杀版（彻底禁用gcc检查）
+name: 终极通关版（骗GCC检查+锁定配置）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,7 +7,7 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 装依赖
+      - name: 安装必需依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
 
       - name: 锁定NDK r25c（不换版本）
@@ -16,26 +16,32 @@ jobs:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 精准搜r25c的Clang（不全局遍历）
+      - name: 精准搜索r25c的Clang（不全局遍历）
         run: |
+          # 只搜r25c目录，确保找到正确的Clang
           CLANG=$(find /usr/local/lib/android/sdk/ndk/r25c/ -name "aarch64-linux-android-clang" -type f | head -1)
+          if [ -z "$CLANG" ]; then
+            echo "❌ 未找到Clang，退出"
+            exit 1
+          fi
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 编译OpenSSL（彻底骗过大gcc检查）
+      - name: 编译OpenSSL（终极骗GCC检查）
         run: |
           # 下载解压
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
           
-          # 强制指定所有编译器为Clang，告诉OpenSSL是交叉编译
+          # 核心技巧：告诉OpenSSL“GCC就是Clang”，彻底骗过大检查
           export CC=$CLANG
+          export GCC=$CLANG  # 关键！让OpenSSL以为找到GCC了
           export CXX=$(dirname $CLANG)/aarch64-linux-android-clang++
           export AR=$AR
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
           export LDFLAGS="-fPIC"
           
-          # 核心参数：--cross-compile-prefix 明确交叉编译，禁用gcc检查
+          # 交叉编译参数+禁用多余模块，双重保险
           ./Configure android-arm64 \
             --prefix=$GITHUB_WORKSPACE/openssl \
             --cross-compile-prefix=aarch64-linux-android- \
@@ -44,7 +50,7 @@ jobs:
           # 编译安装
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
 
-      - name: 装Rust和cargo-ndk
+      - name: 安装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
