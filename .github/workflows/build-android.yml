@@ -1,4 +1,4 @@
-name: 终极通关版（骗GCC检查+锁定配置）
+name: 最终通关版（自动探NDK路径+骗GCC）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -10,44 +10,56 @@ jobs:
       - name: 安装必需依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
 
-      - name: 锁定NDK r25c（不换版本）
+      - name: 安装NDK r25c（锁定版本）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 精准搜索r25c的Clang（不全局遍历）
+      - name: 自动探测NDK实际安装根目录（关键！）
         run: |
-          # 只搜r25c目录，确保找到正确的Clang
-          CLANG=$(find /usr/local/lib/android/sdk/ndk/r25c/ -name "aarch64-linux-android-clang" -type f | head -1)
+          # 先找ndk-build工具，推导NDK根目录（不管装在哪都能找到）
+          NDK_BUILD=$(which ndk-build)
+          if [ -z "$NDK_BUILD" ]; then
+            echo "❌ 未找到NDK，退出"
+            exit 1
+          fi
+          # 从ndk-build路径推导NDK根目录（ndk-build在NDK根目录的"build/tools"下）
+          NDK_ROOT=$(dirname $(dirname $(dirname $NDK_BUILD)))
+          echo "✅ 探测到NDK根目录：$NDK_ROOT"
+          echo "NDK_ROOT=$NDK_ROOT" >> $GITHUB_ENV
+
+      - name: 在NDK根目录下精准搜Clang（不全局遍历）
+        run: |
+          # 只在探测到的NDK根目录下搜索，不遍历其他地方
+          CLANG=$(find $NDK_ROOT -name "aarch64-linux-android-clang" -type f | head -1)
           if [ -z "$CLANG" ]; then
             echo "❌ 未找到Clang，退出"
             exit 1
           fi
+          echo "✅ 找到Clang路径：$CLANG"
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 编译OpenSSL（终极骗GCC检查）
+      - name: 编译OpenSSL（骗GCC检查+正确工具）
         run: |
-          # 下载解压
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
           
-          # 核心技巧：告诉OpenSSL“GCC就是Clang”，彻底骗过大检查
+          # 核心技巧：GCC指向Clang，彻底骗过大检查
           export CC=$CLANG
-          export GCC=$CLANG  # 关键！让OpenSSL以为找到GCC了
+          export GCC=$CLANG
           export CXX=$(dirname $CLANG)/aarch64-linux-android-clang++
           export AR=$AR
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
           export LDFLAGS="-fPIC"
           
-          # 交叉编译参数+禁用多余模块，双重保险
+          # 交叉编译配置
           ./Configure android-arm64 \
             --prefix=$GITHUB_WORKSPACE/openssl \
             --cross-compile-prefix=aarch64-linux-android- \
             no-shared no-zlib no-asm no-comp no-dso no-engine
           
-          # 编译安装
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
 
       - name: 安装Rust和cargo-ndk
