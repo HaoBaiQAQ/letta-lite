@@ -8,7 +8,7 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 安装终极依赖工具链
+      - name: 安装终极依赖工具链（修复空格问题）
         run: sudo apt-get update && sudo apt-get install -y \
           make gcc perl crossbuild-essential-arm64 pkg-config wget unzip
 
