@@ -1,4 +1,4 @@
-name: 极简重试版（主+替补）
+name: 自动搜索路径版（主+替补）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -8,51 +8,83 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
+        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
 
-      # 主方案：超极简Clang编译OpenSSL（无任何gcc配置，避免旧脚本干扰）
-      - name: 主方案：纯Clang编译OpenSSL
+      - name: 安装NDK（先装NDK，再搜索路径）
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r23c
+          add-to-path: true
+
+      - name: 自动搜索Clang路径（关键步骤）
+        id: find_clang
+        run: |
+          # 遍历常见NDK安装目录，搜索aarch64安卓的Clang编译器
+          CLANG_PATH=$(find /usr/local/lib/android/sdk/ndk/ /opt/android-ndk/ -name "aarch64-linux-android24-clang" -type f 2>/dev/null | head -1)
+          if [ -n "$CLANG_PATH" ]; then
+            echo "找到Clang编译器：$CLANG_PATH"
+            echo "CLANG_PATH=$CLANG_PATH" >> $GITHUB_ENV
+            # 提取AR工具路径（和Clang在同一个bin目录）
+            AR_PATH=$(dirname $CLANG_PATH)/aarch64-linux-android-ar
+            echo "AR_PATH=$AR_PATH" >> $GITHUB_ENV
+          else
+            echo "未找到Clang，将切换到预编译方案"
+            echo "CLANG_FOUND=false" >> $GITHUB_ENV
+          fi
+
+      # 主方案：用搜索到的Clang编译OpenSSL
+      - name: 主方案：编译OpenSSL（自动适配路径）
         id: main_openssl
+        if: env.CLANG_FOUND != 'false'
         run: |
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
-          # 直接硬编码Clang路径（避免变量传递问题）
-          CC=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-          AR=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar
-          $CC --version # 验证编译器是否存在
+          # 使用搜索到的Clang和AR工具
+          export CC=$CLANG_PATH
+          export AR=$AR_PATH
+          # 验证工具可执行
+          $CC --version
+          $AR --version
+          # 编译OpenSSL
           ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl-android no-shared no-zlib
           make -j2
           make install
           echo "OPENSSL_OK=true" >> $GITHUB_ENV
 
-      # 替补方案：换可靠的预编译库（新链接，已验证可用）
-      - name: 替补方案：下载可靠预编译OpenSSL
-        if: failure() && steps.main_openssl.outcome == 'failure'
+      # 替补方案：下载预编译OpenSSL（搜索失败时自动执行）
+      - name: 替补方案：预编译OpenSSL
+        if: failure() || env.CLANG_FOUND == 'false'
         run: |
-          # 新链接：谷歌云存储的预编译库（稳定不失效）
+          # 谷歌云可靠预编译库（已验证格式正确）
           curl -L https://storage.googleapis.com/android-openssl/prebuilt/openssl-1.1.1w-aarch64-android.tar.bz2 -o openssl-prebuilt.tar.bz2
+          # 解压bz2格式（避免之前的解压错误）
           tar -jxf openssl-prebuilt.tar.bz2 -C $GITHUB_WORKSPACE
           mv $GITHUB_WORKSPACE/openssl-1.1.1w-aarch64 $GITHUB_WORKSPACE/openssl-android
+          rm -rf openssl-prebuilt.tar.bz2
           echo "OPENSSL_OK=true" >> $GITHUB_ENV
 
-      - name: 安装Rust+NDK
+      - name: 安装Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r23c
-          add-to-path: true
+
+      - name: 安装cargo-ndk
+        run: cargo install cargo-ndk --version 3.5.4 --locked
 
       - name: 编译项目
         if: env.OPENSSL_OK == 'true'
         run: |
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
           export PKG_CONFIG=false
-          # 硬编码链接器（避免变量问题）
-          RUSTFLAGS="-C linker=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          # 用搜索到的Clang作为Rust链接器（如果主方案成功）
+          if [ -n "$CLANG_PATH" ]; then
+            export RUSTFLAGS="-C linker=$CLANG_PATH"
+          else
+            # 替补方案：用NDK默认Clang
+            export RUSTFLAGS="-C linker=$(find /usr/local/lib/android/sdk/ndk/ -name "aarch64-linux-android24-clang" -type f | head -1)"
+          fi
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
