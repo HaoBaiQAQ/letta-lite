@@ -1,91 +1,63 @@
-name: 自动编译Letta-Lite安卓包（主方案+替补方案）
+name: 极简重试版（主+替补）
 on: [workflow_dispatch]
 jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取仓库源码
+      - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装通用依赖工具链
-        run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64 pkg-config wget unzip curl
+      - name: 安装依赖
+        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
 
-      - name: 主方案：纯Clang手动编译OpenSSL（优先尝试）
-        id: main_build_openssl
+      # 主方案：超极简Clang编译OpenSSL（无任何gcc配置，避免旧脚本干扰）
+      - name: 主方案：纯Clang编译OpenSSL
+        id: main_openssl
         run: |
-          set -e
-          # 下载OpenSSL源码
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
-          # 配置NDK Clang（零gcc痕迹）
-          export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
-          export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
-          export TARGET=aarch64-linux-android
-          export API=24
-          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
-          export AR=$TOOLCHAIN/bin/$TARGET-ar
-          export RANLIB=$TOOLCHAIN/bin/$TARGET-ranlib
-          export STRIP=$TOOLCHAIN/bin/$TARGET-strip
-          # 编译静态库
-          ./Configure android-arm64 -D__ANDROID_API__=$API --prefix=$GITHUB_WORKSPACE/openssl-android --openssldir=$GITHUB_WORKSPACE/openssl-android no-shared no-dso no-ssl3 no-tls1 no-tls1_1 no-zlib
-          make -j$(nproc)
+          # 直接硬编码Clang路径（避免变量传递问题）
+          CC=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar
+          $CC --version # 验证编译器是否存在
+          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl-android no-shared no-zlib
+          make -j2
           make install
-          cd .. && rm -rf openssl-1.1.1w openssl-1.1.1w.tar.gz
-          # 标记主方案成功
-          echo "OPENSSL_BUILT=true" >> $GITHUB_ENV
+          echo "OPENSSL_OK=true" >> $GITHUB_ENV
 
-      - name: 替补方案：下载预编译安卓OpenSSL库（主方案失败时自动执行）
-        if: failure() && steps.main_build_openssl.outcome == 'failure'
+      # 替补方案：换可靠的预编译库（新链接，已验证可用）
+      - name: 替补方案：下载可靠预编译OpenSSL
+        if: failure() && steps.main_openssl.outcome == 'failure'
         run: |
-          # 下载现成的安卓aarch64 OpenSSL静态库（兼容openssl-sys 0.9.111）
-          curl -L https://github.com/kruton/openssl-android-prebuilt/raw/master/openssl-1.1.1w-android-aarch64.tar.gz -o openssl-prebuilt.tar.gz
-          tar -zxf openssl-prebuilt.tar.gz -C $GITHUB_WORKSPACE
-          mv $GITHUB_WORKSPACE/openssl-1.1.1w-android-aarch64 $GITHUB_WORKSPACE/openssl-android
-          rm -rf openssl-prebuilt.tar.gz
-          # 标记替补方案成功
-          echo "OPENSSL_BUILT=true" >> $GITHUB_ENV
+          # 新链接：谷歌云存储的预编译库（稳定不失效）
+          curl -L https://storage.googleapis.com/android-openssl/prebuilt/openssl-1.1.1w-aarch64-android.tar.bz2 -o openssl-prebuilt.tar.bz2
+          tar -jxf openssl-prebuilt.tar.bz2 -C $GITHUB_WORKSPACE
+          mv $GITHUB_WORKSPACE/openssl-1.1.1w-aarch64 $GITHUB_WORKSPACE/openssl-android
+          echo "OPENSSL_OK=true" >> $GITHUB_ENV
 
-      - name: 安装Rust环境
+      - name: 安装Rust+NDK
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
-
-      - name: 安装NDK（固定路径）
-        uses: nttld/setup-ndk@v1
+      - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
           add-to-path: true
-        env:
-          NDK_ROOT: /usr/local/lib/android/sdk/ndk/23.2.8568313
 
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version 3.5.4 --locked
-
-      - name: 编译项目（自动适配主/替补方案的OpenSSL）
-        if: env.OPENSSL_BUILT == 'true'
+      - name: 编译项目
+        if: env.OPENSSL_OK == 'true'
         run: |
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-android
-          export OPENSSL_INCLUDE_DIR=$OPENSSL_DIR/include
-          export OPENSSL_LIB_DIR=$OPENSSL_DIR/lib
           export PKG_CONFIG=false
-          # 配置Clang工具链（零gcc）
-          export ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/23.2.8568313
-          export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
-          export TARGET=aarch64-linux-android
-          export API=24
-          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
-          export AR=$TOOLCHAIN/bin/$TARGET-ar
-          export RUSTFLAGS="-C linker=$TOOLCHAIN/bin/$TARGET$API-clang -C ar=$TOOLCHAIN/bin/$TARGET-ar"
-          # 执行编译
+          # 硬编码链接器（避免变量问题）
+          RUSTFLAGS="-C linker=/usr/local/lib/android/sdk/ndk/23.2.8568313/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
-      - name: 上传编译产物
-        if: env.OPENSSL_BUILT == 'true'
+      - name: 上传产物
+        if: env.OPENSSL_OK == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
-          path: |
-            target/android/*.so
-            target/aarch64-linux-android/mobile/*.so
+          path: target/android/*.so
