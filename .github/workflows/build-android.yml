@@ -8,46 +8,31 @@ jobs:
       - name: 拉取仓库源码
         uses: actions/checkout@v4
 
-      - name: 配置系统多架构（添加arm64支持）
-        run: |
-          # 启用多架构支持
-          sudo dpkg --add-architecture arm64
-          # 更新软件源（同步arm64包信息）
-          sudo apt-get update -y
-          # 安装交叉编译基础工具链+OpenSSL依赖
-          sudo apt-get install -y \
-            crossbuild-essential-arm64 \
-            libssl-dev:arm64 \
-            pkg-config
-
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
-          target: aarch64-linux-android # 提前安装安卓目标架构
+          target: aarch64-linux-android
 
-      - name: 安装Android NDK（项目要求的23+）
+      - name: 安装Android NDK（r23c，项目要求）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r23c
+          add-to-path: true # 自动添加NDK到环境变量
 
-      - name: 安装兼容版本的cargo-ndk
+      - name: 安装cargo-ndk（安卓编译工具）
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 运行仓库自带的安卓编译脚本（指定交叉编译环境）
+      - name: 编译安卓包（用cargo-ndk直接编译，绕开系统OpenSSL）
         run: |
-          chmod +x scripts/build-android.sh
-          # 配置交叉编译环境变量
-          export PKG_CONFIG="pkg-config --target=aarch64-linux-android"
+          # 关键：让openssl-sys自动下载安卓版OpenSSL，不用系统库
+          export OPENSSL_NO_VENDOR=0
           export OPENSSL_STATIC=1
-          export OPENSSL_DIR=/usr/aarch64-linux-gnu
-          export CC=aarch64-linux-gnu-gcc # 指定安卓交叉编译器
-          ./scripts/build-android.sh
+          # 用cargo-ndk编译，自动适配NDK和目标架构
+          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
-      - name: 上传编译好的安卓包
+      - name: 上传编译产物
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite安卓包
-          path: |
-            ./target/android/
-            ./target/aarch64-linux-android/mobile/ # 额外兼容脚本可能输出的路径
+          path: target/android/*.so # 编译后的安卓库文件（项目核心产物）
