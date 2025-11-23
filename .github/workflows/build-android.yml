@@ -1,4 +1,4 @@
-name: 硬编码路径版（100%通关）
+name: 最终无错版（硬编码路径+完整NDK配置）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -10,9 +10,10 @@ jobs:
       - name: 安装必需依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
 
-      - name: 安装NDK（无需指定版本，工具已找到）
+      - name: 安装NDK（指定版本29.0.14206865，匹配工具路径）
         uses: nttld/setup-ndk@v1
         with:
+          ndk-version: 29.0.14206865  # 补全必填参数，和日志中的NDK版本一致
           add-to-path: true
 
       - name: 编译OpenSSL（硬编码路径+禁用gcc检查）
