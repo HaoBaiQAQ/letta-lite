@@ -18,6 +18,9 @@ jobs:
         with:
           ndk-version: r23c
 
+      - name: 安装兼容版本的cargo-ndk（适配Rust 1.75.0）
+        run: cargo install cargo-ndk --version 3.5.4
+
       - name: 运行仓库自带的安卓编译脚本
         run: |
           chmod +x scripts/build-android.sh # 给脚本加执行权限
