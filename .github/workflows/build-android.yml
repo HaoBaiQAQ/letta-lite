@@ -9,7 +9,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装基础编译工具（OpenSSL源码编译必需）
-        run: sudo apt-get update && sudo apt-get install -y make gcc perl
+        run: sudo apt-get update && sudo apt-get install -y make gcc perl crossbuild-essential-arm64
 
       - name: 安装Rust环境（1.85.0支持edition2024）
         uses: dtolnay/rust-toolchain@stable
@@ -26,13 +26,16 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译安卓包（强制OpenSSL源码编译，解决openssl-sys报错）
+      - name: 编译安卓包（纯环境变量强制OpenSSL源码编译）
         run: |
-          # 关键：组合环境变量，强制openssl-sys 0.9.111从源码编译
-          OPENSSL_VENDORED=1 \
-          RUSTFLAGS="--cfg openssl_vendored -C linker=aarch64-linux-android-gcc" \
-          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile \
-            --no-default-features --features "vendored-openssl"
+          # 核心环境变量组合，针对openssl-sys 0.9.111专属生效
+          export OPENSSL_VENDORED=1
+          export OPENSSL_STATIC=1
+          export RUSTFLAGS="-C linker=aarch64-linux-android-gcc -C ar=aarch64-linux-android-ar"
+          export CC=aarch64-linux-android-gcc
+          export AR=aarch64-linux-android-ar
+          # 去掉所有无效特性参数，仅保留编译核心配置
+          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传编译产物
         uses: actions/upload-artifact@v4
