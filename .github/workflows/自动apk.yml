@@ -121,6 +121,12 @@ jobs:
           args+=("-classpath")
           args+=("\$(dirname "\$0")/gradle/wrapper/gradle-wrapper.jar")
           args+=("org.gradle.wrapper.GradleWrapperMain")
+              args+=("\$JAVA_OPTS")
+          args+=("\$GRADLE_OPTS")
+          args+=("-Dorg.gradle.appname=\$APP_BASE_NAME")
+          args+=("-classpath")
+          args+=("\$(dirname "\$0")/gradle/wrapper/gradle-wrapper.jar")
+          args+=("org.gradle.wrapper.GradleWrapperMain")
           # By default, we use the terminal for input/output. However, in some cases we need to disable this.
           if \$cygwin || \$msys; then
               APP_HOME=\$(cygpath --path --mixed "\$(dirname "\$0")")
