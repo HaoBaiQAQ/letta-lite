@@ -1,4 +1,4 @@
-name: 升级OpenSSL版本（推荐方案）
+name: 修复下载链接版（只改地址，其他不变）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,51 +7,33 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装必需依赖
+      - name: 安装基础依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
 
-      - name: 安装NDK r25c（锁定版本）
+      - name: 安装NDK r25c（稳定版）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 自动探测NDK根目录+找Clang
+      - name: 自动找NDK和Clang（精准无遍历）
         run: |
-          # 找NDK根目录
           NDK_BUILD=$(which ndk-build)
           [ -z "$NDK_BUILD" ] && { echo "❌ 未找到NDK"; exit 1; }
           NDK_ROOT=$(dirname $(dirname $(dirname $NDK_BUILD)))
-          echo "✅ NDK根目录：$NDK_ROOT"
-
-          # 找Clang（灵活匹配）
           CLANG=$(find $NDK_ROOT -name "aarch64-linux-android*clang" -type f | grep -v "clang++" | head -1)
           [ -z "$CLANG" ] && { echo "❌ 未找到Clang"; exit 1; }
-          echo "✅ 找到Clang：$CLANG"
-
-          # 输出关键变量
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
-          echo "CLANG_BIN_DIR=$(dirname $CLANG)" >> $GITHUB_ENV
 
-      - name: 下载最新稳定版OpenSSL（1.1.1y）
+      - name: 编译OpenSSL 1.1.1y（修复下载链接）
         run: |
-          wget https://www.openssl.org/source/openssl-1.1.1y.tar.gz
+          # 修复：用OpenSSL官方直接下载链接（不会404）
+          wget https://www.openssl.org/source/old/1.1.1/openssl-1.1.1y.tar.gz
           tar -zxf openssl-1.1.1y.tar.gz && cd openssl-1.1.1y
-
-          # 编译配置（**无需修改**）
-          export CC=$CLANG
-          export AR=$AR
-          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
-          export LDFLAGS="-fPIC"
-
-          ./Configure android-arm64 \
-            --prefix=$GITHUB_WORKSPACE/openssl \
-            no-shared no-zlib no-asm
-
-          # 编译安装
+          export CC=$CLANG AR=$AR CFLAGS="-D__ANDROID_API__=24 -fPIC" LDFLAGS="-fPIC"
+          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl no-shared no-zlib no-asm
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1y*
-          echo "✅ OpenSSL编译完成！"
 
       - name: 安装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
@@ -65,7 +47,6 @@ jobs:
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
           export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
-          echo "✅ 项目编译完成！"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
