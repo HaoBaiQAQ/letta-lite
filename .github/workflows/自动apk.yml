@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y \
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk \
-            libxml2-utils  # 修复xmllint缺失问题
+            libxml2-utils
 
       - name: 安装Android SDK和构建工具
         uses: android-actions/setup-android@v3
@@ -147,17 +147,15 @@ jobs:
           # 创建目录结构
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout,jniLibs/arm64-v8a}
 
-          # 1. 布局文件（修复红波浪线：正确XML格式、标签闭合、命名空间）
+          # 1. 布局文件（YAML EOF顶格，XML标签成对）
           cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="16dp">
 
-    <!-- 结果显示区域 -->
     <TextView
         android:id="@+id/resultView"
         android:layout_width="match_parent"
@@ -166,7 +164,6 @@ jobs:
         android:hint="等待Lettalite回复..."
         android:textSize="16sp" />
 
-    <!-- 输入框 -->
     <EditText
         android:id="@+id/inputEdit"
         android:layout_width="match_parent"
@@ -174,7 +171,6 @@ jobs:
         android:hint="输入指令..."
         android:layout_marginBottom="8dp" />
 
-    <!-- 发送按钮 -->
     <Button
         android:id="@+id/sendBtn"
         android:layout_width="wrap_content"
@@ -183,7 +179,6 @@ jobs:
         android:background="#2196F3"
         android:textColor="@android:color/white" />
 
-    <!-- 工具调用按钮组（默认隐藏） -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -208,12 +203,13 @@ jobs:
             android:background="#F44336"
             android:textColor="@android:color/white"
             android:visibility="gone" />
+
     </LinearLayout>
 
 </LinearLayout>
 EOF
 
-          # 2. MainActivity.java（调用Rust .so库）
+          # 2. MainActivity.java（EOF顶格，大括号成对）
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
 package com.letta.app;
 
@@ -256,43 +252,52 @@ public class MainActivity extends Activity {
         ctx = letta_init();
 
         // 发送按钮点击事件
-        sendBtn.setOnClickListener(v -> {
-            String input = inputEdit.getText().toString().trim();
-            if (!input.isEmpty()) {
-                inputEdit.setText("");
-                // 调用Rust核心的对话接口
-                String result = letta_send_input(ctx, input);
-                resultView.setText(result);
+        sendBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String input = inputEdit.getText().toString().trim();
+                if (!input.isEmpty()) {
+                    inputEdit.setText("");
+                    // 调用Rust核心的对话接口
+                    String result = letta_send_input(ctx, input);
+                    resultView.setText(result);
 
-                // 显示工具调用按钮（如果需要）
-                if (result.contains("是否允许") || result.contains("需要调用")) {
-                    allowBtn.setVisibility(View.VISIBLE);
-                    denyBtn.setVisibility(View.VISIBLE);
-                } else {
-                    allowBtn.setVisibility(View.GONE);
-                    denyBtn.setVisibility(View.GONE);
+                    // 显示工具调用按钮（如果需要）
+                    if (result.contains("是否允许") || result.contains("需要调用")) {
+                        allowBtn.setVisibility(View.VISIBLE);
+                        denyBtn.setVisibility(View.VISIBLE);
+                    } else {
+                        allowBtn.setVisibility(View.GONE);
+                        denyBtn.setVisibility(View.GONE);
+                    }
                 }
             }
         });
 
         // 允许工具调用
-        allowBtn.setOnClickListener(v -> {
-            resultView.setText(letta_confirm_tool(ctx, true));
-            allowBtn.setVisibility(View.GONE);
-            denyBtn.setVisibility(View.GONE);
+        allowBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                resultView.setText(letta_confirm_tool(ctx, true));
+                allowBtn.setVisibility(View.GONE);
+                denyBtn.setVisibility(View.GONE);
+            }
         });
 
         // 拒绝工具调用
-        denyBtn.setOnClickListener(v -> {
-            resultView.setText(letta_confirm_tool(ctx, false));
-            allowBtn.setVisibility(View.GONE);
-            denyBtn.setVisibility(View.GONE);
+        denyBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                resultView.setText(letta_confirm_tool(ctx, false));
+                allowBtn.setVisibility(View.GONE);
+                denyBtn.setVisibility(View.GONE);
+            }
         });
     }
 }
 EOF
 
-          # 3. AndroidManifest.xml（修复图标、标签、权限）
+          # 3. AndroidManifest.xml（EOF顶格，标签成对）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -318,10 +323,10 @@ EOF
             android:name=".MainActivity"
             android:exported="true"
             android:label="Lettalite">
-            <<intent-filter>
+            <<<intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-            </</intent-filter>
+            </</</intent-filter>
         </activity>
     </application>
 </manifest>
@@ -434,4 +439,4 @@ EOF
         with:
           name: lettalite-安卓APK（Android7.0+）
           path: android-app/app-debug.apk
-          retention-days: 30  # 延长保存时间到30天
+          retention-days: 30
