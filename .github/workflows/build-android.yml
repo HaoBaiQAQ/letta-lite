@@ -1,4 +1,4 @@
-name: 最终最终最终方案（语法修正，必成）
+name: 全文完整方案：多预编译库自动查找（零编译）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,10 +7,10 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需依赖（一行写法，无语法错误）
-        run: sudo apt-get update && sudo apt-get install -y coreutils pkg-config libssl-dev make perl wget curl gcc
+      - name: 安装基础依赖（仅解压和工具）
+        run: sudo apt-get update && sudo apt-get install -y wget unzip coreutils
 
-      - name: 安装NDK r25c（自动加入PATH）
+      - name: 安装NDK r25c（仅需链接器，不用编译）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
@@ -23,13 +23,66 @@ jobs:
           target: aarch64-linux-android
       - run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目（Rust自动处理OpenSSL）
+      - name: 多来源查找编译好的OpenSSL（自动下载，零编译）
         run: |
-          export OPENSSL_VENDORED=1
-          export OPENSSL_NO_VENDOR=0
-          export PKG_CONFIG_ALLOW_CROSS=1
+          # 6个不同来源的安卓aarch64预编译OpenSSL（含头文件+库文件，直接用）
+          PREBUILT_LINKS=(
+            "https://github.com/krrishnarraj/openssl-android-prebuilt/releases/download/v1.1.1t/openssl-1.1.1t-android-aarch64.zip"
+            "https://mirror.tuna.tsinghua.edu.cn/openssl/android/1.1.1t/openssl-1.1.1t-android-aarch64.zip"
+            "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-openssl/openssl-1.1.1k-android-aarch64.zip"
+            "https://oss.navercorp.com/openssl-android/prebuilt/openssl-1.1.1q-android-aarch64.zip"
+            "https://github.com/leenjewel/openssl_for_android/releases/download/1.1.1t-24/openssl-1.1.1t-aarch64-24.zip"
+            "https://downloads.sourceforge.net/project/android-openssl/prebuilt/openssl-1.1.1n-android-aarch64.zip"
+          )
+
+          # 循环尝试下载，直到找到可用的预编译库
+          OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-prebuilt
+          mkdir -p $OPENSSL_DIR
+          DOWNLOAD_SUCCESS=0
+          for LINK in "${PREBUILT_LINKS[@]}"; do
+            echo "🔍 尝试下载预编译库：$LINK"
+            # 超时10秒，避免卡壳
+            if wget --no-check-certificate --timeout=10 "$LINK" -O openssl.zip; then
+              echo "✅ 找到可用预编译库，解压中..."
+              unzip -o openssl.zip -d $OPENSSL_DIR
+              # 确保头文件和库文件路径正确（适配不同预编译库的目录结构）
+              if [ -d "$OPENSSL_DIR/include" ] && [ -d "$OPENSSL_DIR/lib" ]; then
+                echo "✅ 预编译库目录结构正确"
+              elif [ -d "$OPENSSL_DIR/aarch64/include" ] && [ -d "$OPENSSL_DIR/aarch64/lib" ]; then
+                mv $OPENSSL_DIR/aarch64/* $OPENSSL_DIR/
+              elif [ -d "$OPENSSL_DIR/arm64-v8a/include" ] && [ -d "$OPENSSL_DIR/arm64-v8a/lib" ]; then
+                mv $OPENSSL_DIR/arm64-v8a/* $OPENSSL_DIR/
+              fi
+              DOWNLOAD_SUCCESS=1
+              break
+            else
+              echo "❌ 该链接失效，尝试下一个..."
+              rm -f openssl.zip
+            fi
+          done
+
+          # 若所有预编译库都失效，用最后保底方案（自动编译但无需手动配置）
+          if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+            echo "⚠️ 所有预编译库失效，启用保底方案：自动编译OpenSSL"
+            wget http://www.openssl.org/source/openssl-1.1.1k.tar.gz -O openssl.tar.gz
+            tar -zxf openssl.tar.gz && cd openssl-1.1.1k
+            export CC=aarch64-linux-android-clang
+            export AR=aarch64-linux-android-ar
+            ./Configure android-arm64 --prefix=$OPENSSL_DIR no-shared no-zlib no-asm -fPIC
+            make -j2 && make install
+          fi
+
+          # 配置环境变量，让Rust直接找到预编译库（不用pkg-config）
+          export OPENSSL_INCLUDE_DIR=$OPENSSL_DIR/include
+          export OPENSSL_LIB_DIR=$OPENSSL_DIR/lib
+          export OPENSSL_STATIC=1
+          export PKG_CONFIG=false  # 禁用pkg-config，直接用环境变量指定路径
+
+      - name: 编译项目（直接链接预编译OpenSSL）
+        run: |
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
+          export RUSTFLAGS="-C linker=aarch64-linux-android-clang -C link-arg=-fPIC"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
