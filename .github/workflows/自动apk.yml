@@ -1,5 +1,7 @@
-name: lettalite作者方案：Rust安卓编译（profile mobile版）+ 手动打包APK
-on: [workflow_dispatch]
+name: lettalite安卓APK编译（含Rust核心.so）
+on: 
+  workflow_dispatch:  # 明确指定触发方式，确保按钮显示
+    description: "手动触发安卓APK编译"  # 可选，增加按钮描述
 
 jobs:
   build-android:
@@ -131,8 +133,7 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 修复：使用 |- 语法确保多行脚本不被缩进污染 --------------------------
-      - name: 创建极简Android项目结构（含正确AndroidManifest.xml）
+      - name: 创建极简Android项目结构（含正确Manifest）
         run: |
           set -e
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout,jniLibs/arm64-v8a}
@@ -145,7 +146,6 @@ jobs:
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="16dp">
-
     <TextView
         android:id="@+id/resultView"
         android:layout_width="match_parent"
@@ -153,14 +153,12 @@ jobs:
         android:layout_weight="1"
         android:hint="等待Lettalite回复..."
         android:textSize="16sp" />
-
     <EditText
         android:id="@+id/inputEdit"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="输入指令..."
         android:layout_marginBottom="8dp" />
-
     <Button
         android:id="@+id/sendBtn"
         android:layout_width="wrap_content"
@@ -168,13 +166,11 @@ jobs:
         android:text="发送"
         android:background="#2196F3"
         android:textColor="@android:color/white" />
-
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:layout_marginTop="8dp">
-
         <Button
             android:id="@+id/allowBtn"
             android:layout_width="wrap_content"
@@ -184,7 +180,6 @@ jobs:
             android:textColor="@android:color/white"
             android:layout_marginRight="8dp"
             android:visibility="gone" />
-
         <Button
             android:id="@+id/denyBtn"
             android:layout_width="wrap_content"
@@ -200,7 +195,6 @@ EOF
           # 2. MainActivity.java
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
 package com.letta.app;
-
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -266,43 +260,39 @@ public class MainActivity extends Activity {
 }
 EOF
 
-          # 3. AndroidManifest.xml —— 顶格写 EOF，确保无缩进
+          # 3. AndroidManifest.xml（已修复图标和标签）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.letta.app"
     android:versionCode="1"
     android:versionName="1.0">
-
     <uses-sdk
         android:minSdkVersion="24"
         android:targetSdkVersion="33" />
-
     <application
         android:allowBackup="true"
         android:icon="@android:mipmap/sym_def_app_icon"
         android:label="Lettalite"
         android:theme="@android:style/Theme.Light">
-
         <activity
             android:name=".MainActivity"
             android:exported="true">
-            <intent-filter>
+            <<intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            </</intent-filter>
         </activity>
     </application>
 </manifest>
 EOF
 
-          # 验证文件是否完整
+          # 验证XML格式
           if [ ! -s android-app/src/main/AndroidManifest.xml ]; then
-            echo "❌ AndroidManifest.xml 写入失败或为空"
-            exit 1
+            echo "❌ Manifest写入失败"; exit 1
           fi
-          xmllint --noout android-app/src/main/AndroidManifest.xml || (echo "❌ XML 格式错误" && exit 1)
-          echo "✅ UI和Java代码创建完成，XML格式正确"
+          xmllint --noout android-app/src/main/AndroidManifest.xml || (echo "❌ XML格式错误"; exit 1)
+          echo "✅ Android项目结构创建完成"
 
       - name: 整合.so文件到APK目录
         run: |
@@ -346,9 +336,7 @@ EOF
           echo "✅ so复制完成"
 
           # 6. 打包未签名APK
-          cd $TEMP_DIR
-          zip -r ../unsigned.apk dex resources.ap_ jniLibs
-          cd ..
+          cd $TEMP_DIR && zip -r ../unsigned.apk dex resources.ap_ jniLibs && cd ..
           echo "✅ 未签名APK生成"
 
           # 7. 生成调试密钥
@@ -370,6 +358,6 @@ EOF
       - name: 上传最终APK
         uses: actions/upload-artifact@v4
         with:
-          name: lettalite-全功能安卓APK（直接安装）
+          name: lettalite-安卓APK（直接安装）
           path: android-app/app-debug.apk
           retention-days: 14
