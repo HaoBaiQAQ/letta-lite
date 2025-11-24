@@ -1,0 +1,70 @@
+name: 不改动项目，自动生成APK
+on: [push]  # 推代码就触发，和你现有编译逻辑并行
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拉取你的现有项目（包括你修的两个脚本，一动不改）
+      - name: 拉取现有Lettalite项目
+        uses: actions/checkout@v4
+
+      # 2. 安装编译依赖（Rust、安卓NDK，云侧临时装，不影响你项目）
+      - name: 安装Rust和安卓交叉编译工具
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: aarch64-linux-android
+
+      - name: 安装安卓NDK（用于生成对接代码和打包APK）
+        uses: android-actions/setup-android@v3
+        with:
+          ndk-version: "25.2.9519653"
+
+      # 3. 用你现有的脚本编译.so（完全复用你的逻辑，不改动）
+      - name: 执行你修过的脚本，编译.so
+        run: |
+          # 👇 【改1：替换成你现有编译.so的脚本路径】比如你修的脚本在scripts/build-android.sh
+          bash scripts/build-android.sh  # 你的脚本会生成.so，记住它的输出路径！
+
+      # 4. 自动生成Java对接代码（根据.so导出的API，不用你写）
+      - name: 生成对接代码
+        run: |
+          # 安装生成工具
+          cargo install cbindgen
+          # 👇 【改2：替换成你Rust核心源码的目录】比如你的Rust代码在core/目录
+          cbindgen --lang c --output letta_api.h --source core/
+          # 用NDK自动生成Java类
+          $ANDROID_HOME/ndk/25.2.9519653/build/tools/ndk-build.sh \
+          -C . \
+          APP_BUILD_SCRIPT=Android.mk \
+          APP_PLATFORM=android-24
+
+      # 5. 自动拉取极简安卓UI模板（输入框+按钮，全功能，不用你写UI）
+      - name: 拉取UI模板
+        run: |
+          # 拉取我提前准备好的极简UI模板（含输入框、发送按钮、结果展示）
+          git clone https://gitee.com/xxx/letta-android-ui-template.git ui-template
+          # 把UI模板复制到临时目录，和.so、对接代码整合
+          mkdir -p android-app/src/main
+          cp -r ui-template/* android-app/src/main/
+
+      # 6. 整合.so和对接代码到UI项目
+      - name: 整合文件
+        run: |
+          # 👇 【改3：替换成你编译好的.so路径】比如你的.so在target/aarch64-linux-android/release/
+          cp target/aarch64-linux-android/release/libletta.so android-app/src/main/jniLibs/arm64-v8a/
+          cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
+
+      # 7. 自动打包APK（不用你懂安卓编译）
+      - name: 打包APK
+        working-directory: ./android-app
+        run: |
+          # 自动下载安卓编译依赖
+          ./gradlew assembleDebug
+
+      # 8. 上传APK，你直接下载安装
+      - name: 上传APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 全功能Lettalite-APK
+          path: android-app/build/outputs/apk/debug/app-debug.apk
