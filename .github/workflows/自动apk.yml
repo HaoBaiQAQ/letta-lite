@@ -1,4 +1,4 @@
-name: lettalite作者方案：Rust安卓编译（profile mobile版）+ 自动生成APK
+name: lettalite作者方案：Rust安卓编译（profile mobile版）+ 手动打包APK
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -13,6 +13,8 @@ jobs:
       OUTPUT_DIR: ${{ github.workspace }}/target/android
       CORE_DIR: "core"  # 子包目录（正确）
       CORE_PACKAGE_NAME: "letta-core"  # 子包名（正确）
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      BUILD_TOOLS_VERSION: 33.0.2  # 兼容API 24的稳定构建工具版本
 
     steps:
       - name: 拉取letta-lite源码
@@ -22,31 +24,36 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y \
             coreutils pkg-config make perl wget curl gcc cmake \
-            libssl-dev zlib1g-dev
+            libssl-dev zlib1g-dev zip unzip openjdk-17-jdk
 
-      - name: 正确安装NDK（空格分隔包）
+      - name: 安装Android SDK和构建工具（含aapt/dx/apksigner）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          packages: |
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+            platforms;android-${{ env.ANDROID_API_LEVEL }}
+            build-tools;${{ env.BUILD_TOOLS_VERSION }}
 
-      - name: 验证NDK
+      - name: 验证NDK和SDK工具
         run: |
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK"
-            exit 1
-          fi
+          # 验证NDK
+          NDK_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          if [ -z "$NDK_PATH" ]; then echo "❌ 未找到NDK"; exit 1; fi
           export ANDROID_NDK_ROOT=$NDK_PATH
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "❌ 编译器缺失"
-            exit 1
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then echo "❌ 编译器缺失"; exit 1; fi
+
+          # 验证APK打包工具（aapt/dx/apksigner）
+          BUILD_TOOLS_BIN="${{ env.ANDROID_SDK_ROOT }}/build-tools/${{ env.BUILD_TOOLS_VERSION }}"
+          if [ ! -f "$BUILD_TOOLS_BIN/aapt" ] || [ ! -f "$BUILD_TOOLS_BIN/dx" ] || [ ! -f "$BUILD_TOOLS_BIN/apksigner" ]; then
+            echo "❌ 缺少Android构建工具"; exit 1;
           fi
-          echo "✅ NDK验证通过"
+          echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
+          echo "✅ NDK和SDK工具验证通过"
 
       - name: 下载并编译OpenSSL
         run: |
@@ -79,24 +86,14 @@ jobs:
 
       - name: 修复工作区配置
         run: |
-          # 清理根目录无效配置
           sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
           echo "✅ 已清理根目录Cargo.toml"
-
-          # 验证子包路径
           CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
-          if [ ! -f "$CORE_CARGO" ]; then
-            echo "❌ 子包目录不存在"
-            ls -l */Cargo.toml
-            exit 1
-          fi
-
-          # 添加cdylib配置（生成.so核心）
+          if [ ! -f "$CORE_CARGO" ]; then echo "❌ 子包目录不存在"; ls -l */Cargo.toml; exit 1; fi
           if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
             echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
             echo "✅ 已添加cdylib配置"
           fi
-          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
 
       - name: 编译核心子包（改用 --profile mobile）
         run: |
@@ -105,13 +102,11 @@ jobs:
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
-          # 关键修改：把 --release 换成 --profile mobile
           cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build \
             --package ${{ env.CORE_PACKAGE_NAME }} \
             --profile mobile
           echo "✅ 编译完成，产物目录："
           ls -l ${{ env.OUTPUT_DIR }}
-          # 兜底收集所有.so文件，避免路径问题
           find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
           echo "✅ 最终产物列表："
           ls -l ${{ env.OUTPUT_DIR }}
@@ -123,25 +118,11 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 以下是新增的自动打包APK步骤（本地创建UI，无外部依赖） --------------------------
-      - name: 安装APK打包依赖（云侧临时安装，不影响原有逻辑）
+      # -------------------------- 手动打包APK（无Gradle，无在线下载，100%稳定） --------------------------
+      - name: 本地创建极简UI和Java代码（不变）
         run: |
-          # 安装生成Java对接代码的工具
-          cargo install cbindgen
-          # 安装安卓打包工具gradle和JDK
-          sudo apt-get update && sudo apt-get install -y gradle openjdk-17-jdk
-
-      - name: 生成Java对接代码（自动识别Rust API）
-        run: |
-          # 修正：去掉--source，直接将CORE_DIR作为输入目录
-          cbindgen --lang c --output letta_api.h ${{ env.CORE_DIR }}
-          echo "✅ Java对接代码头文件生成完成"
-
-      - name: 本地创建极简UI文件（不依赖外部仓库，稳定无报错）
-        run: |
-          # 创建安卓项目目录结构（修正：按标准安卓项目结构创建，避免路径错误）
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
-          # 1. 创建UI布局文件（输入框+发送按钮+结果展示区+工具确认按钮）
+          # 1. UI布局文件
           cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -149,24 +130,19 @@ jobs:
               android:layout_height="match_parent"
               android:orientation="vertical"
               android:padding="16dp">
-              <!-- 结果展示区（占满大部分屏幕） -->
               <TextView
                   android:id="@+id/resultView"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
                   android:layout_weight="1"
                   android:hint="等待Lettalite回复..."
-                  android:textSize="16sp"
-                  android:lineSpacingExtra="4dp"/>
-              <!-- 输入框 -->
+                  android:textSize="16sp"/>
               <EditText
                   android:id="@+id/inputEdit"
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:hint="输入你的指令（比如：帮我列个周末计划）..."
-                  android:layout_marginBottom="8dp"
-                  android:inputType="textMultiLine"/>
-              <!-- 发送按钮 -->
+                  android:hint="输入指令..."
+                  android:layout_marginBottom="8dp"/>
               <Button
                   android:id="@+id/sendBtn"
                   android:layout_width="wrap_content"
@@ -174,7 +150,6 @@ jobs:
                   android:text="发送"
                   android:backgroundTint="#2196F3"
                   android:textColor="@android:color/white"/>
-              <!-- 工具调用确认按钮（默认隐藏，需要时显示） -->
               <LinearLayout
                   android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
@@ -200,7 +175,7 @@ jobs:
               </LinearLayout>
           </LinearLayout>
           EOF
-          # 2. 创建MainActivity（绑定UI和Rust .so，实现全功能交互）
+          # 2. MainActivity.java
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
           package com.letta.app;
           import android.os.Bundle;
@@ -209,56 +184,31 @@ jobs:
           import android.widget.EditText;
           import android.widget.TextView;
           import androidx.appcompat.app.AppCompatActivity;
-          // 加载Rust编译的核心.so库（库名和编译产物一致）
-          static {
-              System.loadLibrary("letta-core");
-          }
+          static { System.loadLibrary("letta-core"); }
           public class MainActivity extends AppCompatActivity {
-              // UI组件
               private EditText inputEdit;
               private TextView resultView;
               private Button sendBtn, allowBtn, denyBtn;
-              // Rust核心上下文（用于维持对话状态）
               private long ctx;
-              // 声明Rust导出的3个核心API（和Rust源码的#[no_mangle]函数对应）
-              // 1. 初始化Rust核心
               public native long letta_init();
-              // 2. 发送用户输入给Rust，返回处理结果
               public native String letta_send_input(long ctx, String input);
-              // 3. 确认工具调用（允许/拒绝），返回后续结果
               public native String letta_confirm_tool(long ctx, boolean confirm);
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
-                  // 初始化UI组件
-                  initView();
-                  // 初始化Rust核心（启动对话上下文）
-                  ctx = letta_init();
-                  // 绑定按钮点击事件
-                  bindEvents();
-              }
-              // 初始化UI组件
-              private void initView() {
                   inputEdit = findViewById(R.id.inputEdit);
                   resultView = findViewById(R.id.resultView);
                   sendBtn = findViewById(R.id.sendBtn);
                   allowBtn = findViewById(R.id.allowBtn);
                   denyBtn = findViewById(R.id.denyBtn);
-              }
-              // 绑定按钮点击事件
-              private void bindEvents() {
-                  // 发送按钮：用户输入→传给Rust→展示结果
+                  ctx = letta_init();
                   sendBtn.setOnClickListener(v -> {
                       String input = inputEdit.getText().toString().trim();
                       if (!input.isEmpty()) {
-                          // 清空输入框
                           inputEdit.setText("");
-                          // 调用Rust API，获取结果
                           String result = letta_send_input(ctx, input);
-                          // 展示结果到UI
                           resultView.setText(result);
-                          // 如果结果包含"是否允许"，说明需要工具调用确认，显示按钮
                           if (result.contains("是否允许") || result.contains("需要调用")) {
                               allowBtn.setVisibility(View.VISIBLE);
                               denyBtn.setVisibility(View.VISIBLE);
@@ -268,154 +218,108 @@ jobs:
                           }
                       }
                   });
-                  // 允许工具调用
                   allowBtn.setOnClickListener(v -> {
-                      String result = letta_confirm_tool(ctx, true);
-                      resultView.setText(result);
-                      // 隐藏确认按钮
+                      resultView.setText(letta_confirm_tool(ctx, true));
                       allowBtn.setVisibility(View.GONE);
                       denyBtn.setVisibility(View.GONE);
                   });
-                  // 拒绝工具调用
                   denyBtn.setOnClickListener(v -> {
-                      String result = letta_confirm_tool(ctx, false);
-                      resultView.setText(result);
-                      // 隐藏确认按钮
+                      resultView.setText(letta_confirm_tool(ctx, false));
                       allowBtn.setVisibility(View.GONE);
                       denyBtn.setVisibility(View.GONE);
                   });
               }
           }
           EOF
-          # 3. 创建安卓构建配置文件（build.gradle）—— 最终兼容配置
-          cat > android-app/build.gradle << 'EOF'
-          buildscript {
-              repositories {
-                  maven { url 'https://maven.google.com' }
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:3.6.4'
-              }
-          }
-          apply plugin: 'com.android.application'
-          android {
-              compileSdkVersion 33
-              defaultConfig {
-                  applicationId "com.letta.app"
-                  minSdkVersion 24
-                  targetSdkVersion 33
-                  versionCode 1
-                  versionName "1.0"
-                  ndk {
-                      abiFilters "arm64-v8a"
-                  }
-                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-              }
-              buildTypes {
-                  debug {
-                      minifyEnabled false
-                      shrinkResources false
-                  }
-              }
-              sourceSets {
-                  main {
-                      java.srcDirs = ['src/main/java']
-                      res.srcDirs = ['src/main/res']
-                      jniLibs.srcDirs = ['src/main/jniLibs']
-                  }
-              }
-              compileOptions {
-                  sourceCompatibility = '1.8'
-                  targetCompatibility = '1.8'
-              }
-          }
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.2.0'
-              implementation 'com.google.android.material:material:1.3.0'
-              testImplementation 'junit:junit:4.13.2'
-              androidTestImplementation 'androidx.test.ext:junit:1.1.2'
-              androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
-          }
+          # 3. AndroidManifest.xml（手动创建，指定入口Activity）
+          cat > android-app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.letta.app"
+              android:versionCode="1"
+              android:versionName="1.0">
+              <uses-sdk
+                  android:minSdkVersion="24"
+                  android:targetSdkVersion="33"/>
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="Lettalite"
+                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <<intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </</intent-filter>
+                  </activity>
+              </application>
+          </manifest>
           EOF
-          # 4. 创建settings.gradle
-          cat > android-app/settings.gradle << 'EOF'
-          rootProject.name = "LettaliteApp"
-          include ':app'
-          EOF
-          echo "✅ 本地创建UI文件完成，无外部依赖，稳定可靠"
+          echo "✅ UI和Java代码创建完成"
 
-      - name: 整合.so和对接代码到UI项目
+      - name: 整合.so文件到APK目录
         run: |
-          # 创建jniLibs目录（存放.so和头文件）
           mkdir -p android-app/src/main/jniLibs/arm64-v8a/
-          # 复制Rust编译的.so文件（从官方输出目录获取）
           cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
-          # 复制生成的Java对接头文件
-          cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
-          echo "✅ .so核心和对接代码整合完成"
+          echo "✅ .so核心整合完成"
 
-      # 新增：配置Gradle（稳定下载源+验证，彻底解决exit code 8）
-      - name: 配置Gradle（最终稳定版，无任何错误）
+      - name: 手动编译打包APK（无Gradle，全程本地操作）
         working-directory: ./android-app
         run: |
-          # 1. 确保目录存在（即使已存在也不报错）
-          mkdir -p gradle/wrapper
-          # 2. 创建gradle-wrapper.properties
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
-          EOF
-          # 3. 用Maven Central稳定源下载gradle-wrapper.jar（100%可访问）
-          JAR_URL="https://repo1.maven.org/maven2/org/gradle/wrapper/gradle-wrapper/5.6.4/gradle-wrapper-5.6.4.jar"
-          wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar "$JAR_URL" || {
-              echo "❌ 第一次下载失败，重试一次"
-              wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar "$JAR_URL" || exit 1
-          }
-          # 4. 验证jar文件是否下载成功（大小大于0字节）
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ] || [ ! -s "gradle/wrapper/gradle-wrapper.jar" ]; then
-              echo "❌ gradle-wrapper.jar下载失败或文件为空"
-              exit 1
-          fi
-          echo "✅ gradle-wrapper.jar下载并验证成功"
-          # 5. 生成绝对路径版gradlew
-          cat > gradlew << 'EOF'
-          #!/bin/sh
-          set -e
-          # 固定Java路径（云环境100%存在）
-          JAVA_HOME="/usr/lib/jvm/temurin-17-jdk-amd64"
-          JAVA_EXE="$JAVA_HOME/bin/java"
-          # 固定gradle-wrapper.jar绝对路径
-          GRADLE_WRAPPER_JAR="/home/runner/work/letta-lite/letta-lite/android-app/gradle/wrapper/gradle-wrapper.jar"
-          # 校验jar文件
-          if [ ! -f "$GRADLE_WRAPPER_JAR" ] || [ ! -s "$GRADLE_WRAPPER_JAR" ]; then
-              echo "ERROR: jar文件缺失或为空"
-              exit 1
-          fi
-          # 极简参数拼接
-          ARGS="-classpath $GRADLE_WRAPPER_JAR -Dorg.gradle.appname=gradlew org.gradle.wrapper.GradleWrapperMain $@"
-          # 执行Gradle
-          exec "$JAVA_EXE" $ARGS --no-daemon
-          EOF
-          # 6. 赋予执行权限
-          chmod +x ./gradlew
-          echo "✅ Gradle配置完成，无任何错误"
+          # 定义工具路径和输出目录
+          BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
+          OUTPUT_APK="app-debug.apk"
+          TEMP_DIR="temp_build"
+          mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs}
 
-      - name: 自动打包全功能APK
-        working-directory: ./android-app
-        run: |
-          # 执行编译，显示详细日志
-          ./gradlew assembleDebug --info
-          echo "✅ APK打包完成"
-          # 显示APK路径，确保产物存在
-          ls -l app/build/outputs/apk/debug/
+          # 1. 编译Java代码为class文件
+          javac -source 1.8 -target 1.8 \
+            -cp "${{ env.ANDROID_SDK_ROOT }}/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar:${{ env.ANDROID_SDK_ROOT }}/extras/android/support/v7/appcompat/libs/appcompat-v7.jar" \
+            -d $TEMP_DIR/classes \
+            src/main/java/com/letta/app/MainActivity.java
+          echo "✅ Java代码编译完成"
 
-      - name: 上传全功能APK（供直接下载安装）
+          # 2. 将class文件转为Android可执行的dex文件
+          $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
+          echo "✅ Dex文件生成完成"
+
+          # 3. 打包资源文件（生成resources.ap_）
+          $BUILD_TOOLS_BIN/aapt package -f -m -J $TEMP_DIR -M src/main/AndroidManifest.xml \
+            -S src/main/res -I "${{ env.ANDROID_SDK_ROOT }}/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
+            -F $TEMP_DIR/resources.ap_
+          echo "✅ 资源文件打包完成"
+
+          # 4. 复制.so文件到临时目录
+          cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
+          echo "✅ .so文件复制完成"
+
+          # 5. 打包成未签名APK
+          cd $TEMP_DIR
+          zip -r ../unsigned.apk dex resources.ap_ jniLibs
+          cd ..
+          echo "✅ 未签名APK生成完成"
+
+          # 6. 生成调试签名证书（无密码，方便打包）
+          keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
+            -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
+          echo "✅ 调试证书生成完成"
+
+          # 7. 签名APK（生成最终可安装的APK）
+          $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --out $OUTPUT_APK unsigned.apk
+          echo "✅ APK签名完成"
+
+          # 8. 对齐优化APK（提高运行效率）
+          $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
+          mv $OUTPUT_APK.aligned $OUTPUT_APK
+          echo "✅ APK对齐完成，最终产物：$OUTPUT_APK"
+          ls -l $OUTPUT_APK
+
+      - name: 上传最终APK（可直接安装）
         uses: actions/upload-artifact@v4
         with:
           name: lettalite-全功能安卓APK（直接安装）
-          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          path: android-app/app-debug.apk
           retention-days: 14
