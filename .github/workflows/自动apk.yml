@@ -287,8 +287,19 @@ jobs:
               }
           }
           EOF
-          # 3. 创建安卓构建配置文件（build.gradle）
+          # 3. 创建安卓构建配置文件（build.gradle）—— 修复插件找不到的问题
           cat > android-app/build.gradle << EOF
+          // 新增：指定插件仓库（告诉Gradle去哪下载安卓插件）
+          buildscript {
+              repositories {
+                  google()  // 谷歌官方仓库（安卓插件的主仓库）
+                  mavenCentral()  // 中央仓库（备用）
+              }
+              dependencies {
+                  // 新增：指定安卓插件版本（用稳定版7.4.2，适配编译环境）
+                  classpath 'com.android.tools.build:gradle:7.4.2'
+              }
+          }
           plugins {
               id 'com.android.application'
           }
