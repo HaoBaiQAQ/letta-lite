@@ -26,11 +26,12 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk
 
+      # 修复1：去掉废弃的appcompat依赖，只安装必需的包
       - name: 安装Android SDK和构建工具（含aapt/dx/apksigner）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }} extras/android/support/v7/appcompat"
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }}"
 
       - name: 查看SDK安装目录
         run: |
@@ -38,8 +39,8 @@ jobs:
           ls -l ${{ env.ANDROID_SDK_ROOT }}
           echo "=== build-tools目录 ==="
           ls -l ${{ env.ANDROID_SDK_ROOT }}/build-tools/
-          echo "=== appcompat依赖目录 ==="
-          ls -l ${{ env.ANDROID_SDK_ROOT }}/extras/android/support/v7/appcompat/
+          echo "=== platforms目录 ==="
+          ls -l ${{ env.ANDROID_SDK_ROOT }}/platforms/
 
       - name: 验证NDK和SDK工具（动态查找路径）
         run: |
@@ -127,11 +128,11 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 手动打包APK（修复Java依赖和语法） --------------------------
-      - name: 本地创建极简UI和Java代码（修复依赖引用）
+      # -------------------------- 手动打包APK（改用原生Activity，去掉废弃依赖） --------------------------
+      - name: 本地创建极简UI和Java代码（无appcompat依赖）
         run: |
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
-          # 1. UI布局文件（不变）
+          # 1. UI布局文件（不变，用原生控件）
           cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -157,7 +158,7 @@ jobs:
                   android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
                   android:text="发送"
-                  android:backgroundTint="#2196F3"
+                  android:background="#2196F3"  <!-- 用原生背景色，不用backgroundTint -->
                   android:textColor="@android:color/white"/>
               <LinearLayout
                   android:layout_width="wrap_content"
@@ -169,7 +170,7 @@ jobs:
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
                       android:text="允许工具调用"
-                      android:backgroundTint="#4CAF50"
+                      android:background="#4CAF50"
                       android:textColor="@android:color/white"
                       android:layout_marginRight="8dp"
                       android:visibility="gone"/>
@@ -178,13 +179,13 @@ jobs:
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
                       android:text="拒绝工具调用"
-                      android:backgroundTint="#F44336"
+                      android:background="#F44336"
                       android:textColor="@android:color/white"
                       android:visibility="gone"/>
               </LinearLayout>
           </LinearLayout>
           EOF
-          # 2. MainActivity.java（修复代码格式，确保静态代码块在类内部）
+          # 2. MainActivity.java（改用原生Activity，去掉appcompat依赖）
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
           package com.letta.app;
 
@@ -193,10 +194,10 @@ jobs:
           import android.widget.Button;
           import android.widget.EditText;
           import android.widget.TextView;
-          import androidx.appcompat.app.AppCompatActivity;
+          import android.app.Activity;  // 用原生Activity，不用AppCompatActivity
 
-          public class MainActivity extends AppCompatActivity {
-              // 静态代码块（加载Rust .so库）- 确保在类内部
+          public class MainActivity extends Activity {  // 继承原生Activity
+              // 静态代码块（加载Rust .so库）
               static {
                   System.loadLibrary("letta-core");
               }
@@ -259,7 +260,7 @@ jobs:
               }
           }
           EOF
-          # 3. AndroidManifest.xml（修复intent-filter标签闭合错误）
+          # 3. AndroidManifest.xml（用原生主题，去掉appcompat相关）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -273,11 +274,11 @@ jobs:
                   android:allowBackup="true"
                   android:icon="@mipmap/ic_launcher"
                   android:label="Lettalite"
-                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+                  android:theme="@android:style/Theme.Light">  <!-- 用原生主题 -->
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
-                      <<intent-filter>  <!-- 修复：之前多了一个"<" -->
+                      <<intent-filter>  <!-- 修复之前多一个"<"的错误 -->
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </</intent-filter>
@@ -285,7 +286,7 @@ jobs:
               </application>
           </manifest>
           EOF
-          echo "✅ UI和Java代码创建完成（修复依赖和语法）"
+          echo "✅ UI和Java代码创建完成（无废弃依赖）"
 
       - name: 整合.so文件到APK目录
         run: |
@@ -293,7 +294,7 @@ jobs:
           cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心整合完成"
 
-      - name: 手动编译打包APK（恢复appcompat依赖）
+      - name: 手动编译打包APK（无任何额外依赖）
         working-directory: ./android-app
         run: |
           BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
@@ -302,10 +303,9 @@ jobs:
           TEMP_DIR="temp_build"
           mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs}
 
-          # 1. 编译Java代码（恢复appcompat依赖，解决bootstrap警告）
+          # 1. 编译Java代码（只依赖原生android.jar，无额外依赖）
           javac -source 1.8 -target 1.8 \
             -bootclasspath "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
-            -cp "$ANDROID_SDK_ROOT/extras/android/support/v7/appcompat/libs/appcompat-v7.jar" \
             -d $TEMP_DIR/classes \
             src/main/java/com/letta/app/MainActivity.java
           echo "✅ Java代码编译完成"
