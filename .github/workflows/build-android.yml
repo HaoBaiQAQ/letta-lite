@@ -1,4 +1,4 @@
-name: 终极方案：Rust安卓编译（参数完全正确版）
+name: 终极方案：Rust安卓编译（工作区适配版）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -11,6 +11,7 @@ jobs:
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       OUTPUT_DIR: ${{ github.workspace }}/target/android
+      CORE_PACKAGE: "letta-core"  # 核心子包名（生成.so的包）
 
     steps:
       - name: 拉取letta-lite源码
@@ -22,41 +23,29 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      - name: 正确安装NDK（包用空格分隔，不用额外下载工具链）
+      - name: 正确安装NDK（空格分隔包）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          # 关键修复：多个包用空格分隔（sdkmanager唯一支持的格式）
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 验证NDK安装（确保包正确识别）
+      - name: 验证NDK
         run: |
-          # 列出所有已安装的包，确认NDK和platforms存在
-          echo "✅ 已安装的安卓包："
-          sdkmanager --list_installed | grep -E "ndk|platforms"
-
-          # 查找NDK路径（兼容所有情况）
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
           if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK ${{ env.ANDROID_NDK_VERSION }}"
+            echo "❌ 未找到NDK"
             exit 1
           fi
-          echo "✅ NDK路径：$NDK_PATH"
           export ANDROID_NDK_ROOT=$NDK_PATH
-
-          # 配置工具链
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-
-          # 验证编译器
           if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
             echo "❌ 编译器缺失"
-            ls -l $NDK_TOOLCHAIN_BIN
             exit 1
           fi
-          echo "✅ 工具链验证通过"
+          echo "✅ NDK验证通过"
 
       - name: 下载并编译OpenSSL
         run: |
@@ -87,27 +76,40 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 强制配置cdylib（生成.so）
+      - name: 修复工作区配置（核心！）
         run: |
-          echo -e "[lib]\ncrate-type = [\"cdylib\"]\nname = \"letta_lite\"" > Cargo.toml.tmp
-          cat Cargo.toml >> Cargo.toml.tmp
-          mv Cargo.toml.tmp Cargo.toml
-          echo "✅ cdylib配置完成"
+          # 1. 移除根目录Cargo.toml的[lib]配置（虚拟清单不允许）
+          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
+          echo "✅ 已移除根目录无效[lib]配置"
 
-      - name: 编译并收集产物
+          # 2. 在核心子包（letta-core）的Cargo.toml添加cdylib
+          CORE_CARGO="${{ env.CORE_PACKAGE }}/Cargo.toml"
+          if [ ! -f "$CORE_CARGO" ]; then
+            echo "❌ 核心子包$CORE_CARGO不存在，检查包名"
+            exit 1
+          fi
+          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+            echo "✅ 已给$CORE_CARGO添加cdylib配置"
+          fi
+          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
+
+      - name: 编译核心子包（生成.so）
         run: |
           cargo clean
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build --release
-          find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
-          echo "✅ 产物列表："
+          # 关键：--package 指定编译核心子包，避免工作区歧义
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build --package ${{ env.CORE_PACKAGE }} --release
+          echo "✅ 编译完成，产物目录："
           ls -l ${{ env.OUTPUT_DIR }}
-          if [ -z "$(ls -A ${{ env.OUTPUT_DIR }}/*.so 2>/dev/null)" ]; then
-            echo "❌ 未生成.so文件"
-            exit 1
+          # 兜底收集
+          if [ -z "$(ls -A ${{ env.OUTPUT_DIR }})" ]; then
+            echo "⚠️  目标目录无产物，复制默认路径"
+            cp target/${{ env.TARGET_ARCH }}/release/lib*.so ${{ env.OUTPUT_DIR }}/
+            ls -l ${{ env.OUTPUT_DIR }}
           fi
 
       - name: 上传产物
