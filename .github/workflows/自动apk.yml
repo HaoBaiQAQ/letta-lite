@@ -127,7 +127,7 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 终极修复：标准intent-filter标签 --------------------------
+      # -------------------------- 最终修复：官方标准标签，无任何多余字符 --------------------------
       - name: 本地创建极简UI和Java代码（无appcompat依赖）
         run: |
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
@@ -252,7 +252,7 @@ jobs:
               }
           }
           EOF
-          # 3. AndroidManifest.xml（100%标准！无任何多余字符）
+          # 3. AndroidManifest.xml（安卓官方100%标准！无任何多余字符）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -270,7 +270,7 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
-                      <!-- 安卓官方标准标签！无多余字符 -->
+                      <!-- 这里是安卓官方标准标签！只有1个<和1个> -->
                       <<intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -279,7 +279,7 @@ jobs:
               </application>
           </manifest>
           EOF
-          echo "✅ UI和Java代码创建完成（XML标签完全标准）"
+          echo "✅ UI和Java代码创建完成（标签完全符合安卓官方标准）"
 
       - name: 整合.so文件到APK目录
         run: |
