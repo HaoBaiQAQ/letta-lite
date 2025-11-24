@@ -1,4 +1,4 @@
-name: 终极方案：Rust安卓编译（子包路径修正版）
+name: 终极方案：Rust安卓编译（最终无错版）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -11,8 +11,8 @@ jobs:
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       OUTPUT_DIR: ${{ github.workspace }}/target/android
-      CORE_DIR: "core"  # 子包目录名（实际存在的目录）
-      CORE_PACKAGE_NAME: "letta-core"  # 子包实际名称（core/Cargo.toml里的name字段）
+      CORE_DIR: "core"  # 子包目录（正确）
+      CORE_PACKAGE_NAME: "letta-core"  # 子包名（正确）
 
     steps:
       - name: 拉取letta-lite源码
@@ -77,43 +77,41 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 修复工作区配置（精准匹配子包路径）
+      - name: 修复工作区配置
         run: |
-          # 1. 移除根目录无效[lib]配置（如果有）
+          # 清理根目录无效配置
           sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
           echo "✅ 已清理根目录Cargo.toml"
 
-          # 2. 验证核心子包目录是否存在
+          # 验证子包路径
           CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
           if [ ! -f "$CORE_CARGO" ]; then
-            echo "❌ 子包目录${{ env.CORE_DIR }}不存在，列出所有子包目录："
-            ls -l */Cargo.toml  # 显示所有子包的Cargo.toml
+            echo "❌ 子包目录不存在"
+            ls -l */Cargo.toml
             exit 1
           fi
-          echo "✅ 找到核心子包配置：$CORE_CARGO"
 
-          # 3. 给子包添加cdylib配置（生成.so）
+          # 添加cdylib配置
           if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
             echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
-            echo "✅ 已给$CORE_CARGO添加cdylib配置"
+            echo "✅ 已添加cdylib配置"
           fi
           cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
 
-      - name: 编译核心子包（生成.so）
+      - name: 编译核心子包（生成.so，去掉重复参数）
         run: |
           cargo clean
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
-          # 编译子包：--package 指定包名，--manifest-path 指定配置文件（双重保险）
+          # 关键：去掉重复的--manifest-path，只保留--package指定包名
           cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build \
             --package ${{ env.CORE_PACKAGE_NAME }} \
-            --manifest-path ${{ env.CORE_DIR }}/Cargo.toml \
             --release
           echo "✅ 编译完成，产物目录："
           ls -l ${{ env.OUTPUT_DIR }}
-          # 兜底收集所有.so文件
+          # 兜底收集
           find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
           echo "✅ 最终产物列表："
           ls -l ${{ env.OUTPUT_DIR }}
