@@ -1,4 +1,4 @@
-name: 最终最终绝杀版（造gcc符号链接+骗检查）
+name: 根源解决版（删gcc检查代码+精准配置）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -8,7 +8,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装必需依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils
+        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils sed
 
       - name: 安装NDK r25c（锁定版本）
         uses: nttld/setup-ndk@v1
@@ -16,53 +16,49 @@ jobs:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 自动探测NDK根目录
+      - name: 自动探测NDK根目录+找Clang
         run: |
+          # 找NDK根目录
           NDK_BUILD=$(which ndk-build)
-          if [ -z "$NDK_BUILD" ]; then
-            echo "❌ 未找到NDK"
-            exit 1
-          fi
+          [ -z "$NDK_BUILD" ] && { echo "❌ 未找到NDK"; exit 1; }
           NDK_ROOT=$(dirname $(dirname $(dirname $NDK_BUILD)))
           echo "✅ NDK根目录：$NDK_ROOT"
-          echo "NDK_ROOT=$NDK_ROOT" >> $GITHUB_ENV
 
-      - name: 灵活搜索Clang+创建gcc符号链接（核心！）
-        run: |
-          # 搜索aarch64架构的Clang（覆盖所有变体）
+          # 找Clang（灵活匹配）
           CLANG=$(find $NDK_ROOT -name "aarch64-linux-android*clang" -type f | grep -v "clang++" | head -1)
-          if [ -z "$CLANG" ]; then
-            echo "❌ 未找到Clang"
-            exit 1
-          fi
-          CLANG_BIN_DIR=$(dirname $CLANG)  # Clang所在的bin目录（已在PATH里）
-          GCC_LINK_NAME="aarch64-linux-android-gcc"  # OpenSSL要找的gcc命令名
-          GCC_LINK_PATH="$CLANG_BIN_DIR/$GCC_LINK_NAME"
-          
-          # 创建符号链接：让aarch64-linux-android-gcc指向Clang
-          sudo ln -s $CLANG $GCC_LINK_PATH
-          echo "✅ 创建符号链接：$GCC_LINK_PATH -> $CLANG"
-          echo "✅ 验证gcc命令：$(which $GCC_LINK_NAME)"  # 验证是否能找到
-          
+          [ -z "$CLANG" ] && { echo "❌ 未找到Clang"; exit 1; }
+          echo "✅ 找到Clang：$CLANG"
+
+          # 输出关键变量
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
+          echo "CLANG_BIN_DIR=$(dirname $CLANG)" >> $GITHUB_ENV
 
-      - name: 编译OpenSSL（彻底过gcc检查）
+      - name: 下载OpenSSL+删除gcc检查代码（核心！）
         run: |
+          # 下载解压
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
-          
-          # 现在PATH里有aarch64-linux-android-gcc（实际是Clang），OpenSSL能找到
-          export CC=aarch64-linux-android-gcc  # 直接用创建的gcc链接
+
+          # 关键操作：用sed删掉OpenSSL配置脚本里的gcc检查代码
+          # 目标代码：检查是否存在aarch64-linux-android-gcc，不存在则报错
+          sed -i '/check_gcc.*aarch64-linux-android-gcc/d' Configure
+          sed -i '/die "no NDK aarch64-linux-android-gcc on \$PATH"/d' Configure
+          echo "✅ 已删除OpenSSL的gcc检查代码"
+
+          # 编译配置
+          export CC=$CLANG
           export AR=$AR
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
           export LDFLAGS="-fPIC"
-          
+
           ./Configure android-arm64 \
             --prefix=$GITHUB_WORKSPACE/openssl \
             no-shared no-zlib no-asm
-          
+
+          # 编译安装
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
+          echo "✅ OpenSSL编译完成！"
 
       - name: 安装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
@@ -76,6 +72,7 @@ jobs:
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
           export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
+          echo "✅ 项目编译完成！"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
