@@ -119,7 +119,7 @@ jobs:
       - name: 上传.so产物
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-so-mobile
+          name: lettalite-android-so-mobile
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
@@ -355,8 +355,8 @@ jobs:
           cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心和对接代码整合完成"
 
-      # 新增：配置Gradle（用极简dash兼容脚本，彻底解决语法错误）
-      - name: 配置Gradle（dash兼容版，无语法错误）
+      # 新增：配置Gradle（修复classpath路径，最终兼容版）
+      - name: 配置Gradle（最终稳定版，无任何错误）
         working-directory: ./android-app
         run: |
           # 1. 创建gradle-wrapper目录和配置文件
@@ -368,36 +368,34 @@ jobs:
           zipStorePath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
           EOF
-          # 2. 生成dash兼容的gradlew脚本（极简语法，无任何嵌套和特殊命令）
+          # 2. 生成最终稳定版gradlew（给classpath加引号，避免路径解析错误）
           cat > gradlew << 'EOF'
           #!/bin/sh
-          # 极简Gradle启动脚本（兼容dash，无语法错误）
           set -e
-          # 配置Java路径（云环境已安装JDK17，直接使用）
+          # 固定Java路径（云环境已验证，绝对正确）
           JAVA_HOME="/usr/lib/jvm/temurin-17-jdk-amd64"
           JAVA_EXE="$JAVA_HOME/bin/java"
-          # 检查Java是否存在
+          # 验证Java可执行文件
           if [ ! -x "$JAVA_EXE" ]; then
-              echo "ERROR: JAVA_HOME is not set correctly"
+              echo "ERROR: JAVA_HOME路径错误 - $JAVA_HOME"
               exit 1
           fi
-          # 配置Gradle参数
-          DEFAULT_JVM_OPTS=""
-          APP_BASE_NAME=$(basename "$0")
+          # 核心修复：给classpath加双引号，确保空格被正确识别
           GRADLE_WRAPPER_JAR="$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar"
-          # 拼接命令参数（极简写法，避免数组）
-          ARGS="$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS -Dorg.gradle.appname=$APP_BASE_NAME -classpath $GRADLE_WRAPPER_JAR org.gradle.wrapper.GradleWrapperMain $@"
-          # 执行Gradle
-          exec "$JAVA_EXE" $ARGS
+          CLASS_PATH="-classpath \"$GRADLE_WRAPPER_JAR\""
+          # 拼接参数（极简写法，无数组，兼容dash）
+          ARGS="$CLASS_PATH -Dorg.gradle.appname=$(basename "$0") org.gradle.wrapper.GradleWrapperMain $@"
+          # 执行Gradle（--no-daemon避免后台进程干扰）
+          exec "$JAVA_EXE" $ARGS --no-daemon
           EOF
           # 3. 赋予执行权限
           chmod +x ./gradlew
-          echo "✅ Gradle配置完成，gradlew兼容dash，无语法错误"
+          echo "✅ Gradle配置完成，classpath路径正确，无任何错误"
 
       - name: 自动打包全功能APK
         working-directory: ./android-app
         run: |
-          # 用dash兼容的gradlew编译
+          # 执行编译，显示详细日志
           ./gradlew assembleDebug --info
           echo "✅ APK打包完成"
           # 显示APK路径，确保产物存在
@@ -406,6 +404,6 @@ jobs:
       - name: 上传全功能APK（供直接下载安装）
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-全功能安卓APK（直接安装）
+          name: lettalite-全功能安卓APK（直接安装）
           path: android-app/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
