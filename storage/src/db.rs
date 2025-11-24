@@ -3,9 +3,9 @@ use rusqlite::{Connection, params, OptionalExtension};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use chrono::Utc;  // 修复：删除未使用的 DateTime 导入
 use crate::{
-    error::{Result, StorageError},
+    error::Result,  // 修复：删除未使用的 StorageError 导入
     models::*,
     migrations,
 };
@@ -357,8 +357,9 @@ impl Storage {
     // Backup and restore
     pub fn backup(&self, path: &Path) -> Result<()> {
         let conn = self.conn()?;
-        let backup_conn = Connection::open(path)?;
-        let backup = rusqlite::backup::Backup::new(&conn, &backup_conn)?;
+        let mut backup_conn = Connection::open(path)?;  // 修复1：添加 mut 关键字，声明可变连接
+        // 修复2：第二个参数改为 &mut backup_conn，满足函数对可变引用的要求
+        let backup = rusqlite::backup::Backup::new(&conn, &mut backup_conn)?;
         backup.run_to_completion(5, std::time::Duration::from_millis(250), None)?;
         Ok(())
     }
