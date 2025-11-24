@@ -21,11 +21,10 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="Lettalite">
-            <!-- 标准intent-filter写法：仅单个<和</ -->
-            <<intent-filter>
+            <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-            </</intent-filter>
+            </intent-filter>
         </activity>
     </application>
 </manifest>
