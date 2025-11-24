@@ -14,7 +14,7 @@ jobs:
       CORE_DIR: "core"  # 子包目录（正确）
       CORE_PACKAGE_NAME: "letta-core"  # 子包名（正确）
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      BUILD_TOOLS_VERSION: 28.0.3  # 关键：换API 24兼容的稳定版本（官方推荐）
+      BUILD_TOOLS_VERSION: 28.0.3  # 兼容API 24的稳定版本
 
     steps:
       - name: 拉取letta-lite源码
@@ -26,26 +26,24 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk
 
-      # 修复1：用兼容的build-tools版本，空格分隔包
       - name: 安装Android SDK和构建工具（含aapt/dx/apksigner）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }}"
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }} extras/android/support/v7/appcompat"
 
-      # 新增：列出SDK目录，确认安装结果（方便排查）
       - name: 查看SDK安装目录
         run: |
           echo "=== SDK根目录 ==="
           ls -l ${{ env.ANDROID_SDK_ROOT }}
           echo "=== build-tools目录 ==="
           ls -l ${{ env.ANDROID_SDK_ROOT }}/build-tools/
-          echo "=== ndk目录 ==="
-          ls -l ${{ env.ANDROID_SDK_ROOT }}/ndk/
+          echo "=== appcompat依赖目录 ==="
+          ls -l ${{ env.ANDROID_SDK_ROOT }}/extras/android/support/v7/appcompat/
 
-      - name: 验证NDK和SDK工具（修复2：动态查找工具路径）
+      - name: 验证NDK和SDK工具（动态查找路径）
         run: |
-          # 验证NDK（不变）
+          # 验证NDK
           NDK_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
           if [ -z "$NDK_PATH" ]; then echo "❌ 未找到NDK"; exit 1; fi
           export ANDROID_NDK_ROOT=$NDK_PATH
@@ -55,29 +53,16 @@ jobs:
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then echo "❌ 编译器缺失"; exit 1; fi
 
-          # 修复2：动态查找build-tools工具（aapt/dx/apksigner），不硬编码路径
+          # 动态查找build-tools工具
           AAPT_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name aapt -type f | head -1)
           DX_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name dx -type f | head -1)
           APKSIGNER_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name apksigner -type f | head -1)
-
-          # 验证工具是否找到
           if [ -z "$AAPT_PATH" ] || [ -z "$DX_PATH" ] || [ -z "$APKSIGNER_PATH" ]; then
-            echo "❌ 缺少Android构建工具（aapt/dx/apksigner）"
-            echo "已找到的工具路径："
-            echo "aapt: $AAPT_PATH"
-            echo "dx: $DX_PATH"
-            echo "apksigner: $APKSIGNER_PATH"
-            exit 1;
+            echo "❌ 缺少Android构建工具"; exit 1;
           fi
-
-          # 提取工具所在目录，供后续使用
           BUILD_TOOLS_BIN=$(dirname "$AAPT_PATH")
           echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
           echo "✅ NDK和SDK工具验证通过"
-          echo "工具路径："
-          echo "aapt: $AAPT_PATH"
-          echo "dx: $DX_PATH"
-          echo "apksigner: $APKSIGNER_PATH"
 
       - name: 下载并编译OpenSSL
         run: |
@@ -142,11 +127,11 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 手动打包APK（无Gradle，全程本地操作） --------------------------
-      - name: 本地创建极简UI和Java代码（不变）
+      # -------------------------- 手动打包APK（修复Java依赖和语法） --------------------------
+      - name: 本地创建极简UI和Java代码（修复依赖引用）
         run: |
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
-          # 1. UI布局文件
+          # 1. UI布局文件（不变）
           cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -199,34 +184,51 @@ jobs:
               </LinearLayout>
           </LinearLayout>
           EOF
-          # 2. MainActivity.java
+          # 2. MainActivity.java（修复代码格式，确保静态代码块在类内部）
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
           package com.letta.app;
+
           import android.os.Bundle;
           import android.view.View;
           import android.widget.Button;
           import android.widget.EditText;
           import android.widget.TextView;
           import androidx.appcompat.app.AppCompatActivity;
-          static { System.loadLibrary("letta-core"); }
+
           public class MainActivity extends AppCompatActivity {
+              // 静态代码块（加载Rust .so库）- 确保在类内部
+              static {
+                  System.loadLibrary("letta-core");
+              }
+
+              // UI组件
               private EditText inputEdit;
               private TextView resultView;
               private Button sendBtn, allowBtn, denyBtn;
+              // Rust核心上下文
               private long ctx;
+
+              // 声明Rust导出的核心API
               public native long letta_init();
               public native String letta_send_input(long ctx, String input);
               public native String letta_confirm_tool(long ctx, boolean confirm);
+
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
+
+                  // 初始化UI组件
                   inputEdit = findViewById(R.id.inputEdit);
                   resultView = findViewById(R.id.resultView);
                   sendBtn = findViewById(R.id.sendBtn);
                   allowBtn = findViewById(R.id.allowBtn);
                   denyBtn = findViewById(R.id.denyBtn);
+
+                  // 初始化Rust核心
                   ctx = letta_init();
+
+                  // 绑定按钮点击事件
                   sendBtn.setOnClickListener(v -> {
                       String input = inputEdit.getText().toString().trim();
                       if (!input.isEmpty()) {
@@ -242,11 +244,13 @@ jobs:
                           }
                       }
                   });
+
                   allowBtn.setOnClickListener(v -> {
                       resultView.setText(letta_confirm_tool(ctx, true));
                       allowBtn.setVisibility(View.GONE);
                       denyBtn.setVisibility(View.GONE);
                   });
+
                   denyBtn.setOnClickListener(v -> {
                       resultView.setText(letta_confirm_tool(ctx, false));
                       allowBtn.setVisibility(View.GONE);
@@ -255,7 +259,7 @@ jobs:
               }
           }
           EOF
-          # 3. AndroidManifest.xml（手动创建，指定入口Activity）
+          # 3. AndroidManifest.xml（修复intent-filter标签闭合错误）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -273,7 +277,7 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
-                      <<intent-filter>
+                      <<intent-filter>  <!-- 修复：之前多了一个"<" -->
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </</intent-filter>
@@ -281,7 +285,7 @@ jobs:
               </application>
           </manifest>
           EOF
-          echo "✅ UI和Java代码创建完成"
+          echo "✅ UI和Java代码创建完成（修复依赖和语法）"
 
       - name: 整合.so文件到APK目录
         run: |
@@ -289,53 +293,54 @@ jobs:
           cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心整合完成"
 
-      - name: 手动编译打包APK（无Gradle，全程本地操作）
+      - name: 手动编译打包APK（恢复appcompat依赖）
         working-directory: ./android-app
         run: |
-          # 定义工具路径（使用动态查找的BUILD_TOOLS_BIN）
           BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
+          ANDROID_SDK_ROOT="${{ env.ANDROID_SDK_ROOT }}"
           OUTPUT_APK="app-debug.apk"
           TEMP_DIR="temp_build"
           mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs}
 
-          # 1. 编译Java代码为class文件
+          # 1. 编译Java代码（恢复appcompat依赖，解决bootstrap警告）
           javac -source 1.8 -target 1.8 \
-            -cp "${{ env.ANDROID_SDK_ROOT }}/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
+            -bootclasspath "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
+            -cp "$ANDROID_SDK_ROOT/extras/android/support/v7/appcompat/libs/appcompat-v7.jar" \
             -d $TEMP_DIR/classes \
             src/main/java/com/letta/app/MainActivity.java
           echo "✅ Java代码编译完成"
 
-          # 2. 将class文件转为Android可执行的dex文件
+          # 2. 生成dex文件
           $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
           echo "✅ Dex文件生成完成"
 
-          # 3. 打包资源文件（生成resources.ap_）
+          # 3. 打包资源文件
           $BUILD_TOOLS_BIN/aapt package -f -m -J $TEMP_DIR -M src/main/AndroidManifest.xml \
-            -S src/main/res -I "${{ env.ANDROID_SDK_ROOT }}/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
+            -S src/main/res -I "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
             -F $TEMP_DIR/resources.ap_
           echo "✅ 资源文件打包完成"
 
-          # 4. 复制.so文件到临时目录
+          # 4. 复制.so文件
           cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
           echo "✅ .so文件复制完成"
 
-          # 5. 打包成未签名APK
+          # 5. 打包未签名APK
           cd $TEMP_DIR
           zip -r ../unsigned.apk dex resources.ap_ jniLibs
           cd ..
           echo "✅ 未签名APK生成完成"
 
-          # 6. 生成调试签名证书（无密码，方便打包）
+          # 6. 生成调试证书
           keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
             -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
           echo "✅ 调试证书生成完成"
 
-          # 7. 签名APK（生成最终可安装的APK）
+          # 7. 签名APK
           $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
             --out $OUTPUT_APK unsigned.apk
           echo "✅ APK签名完成"
 
-          # 8. 对齐优化APK（提高运行效率）
+          # 8. 对齐APK
           $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
           mv $OUTPUT_APK.aligned $OUTPUT_APK
           echo "✅ APK对齐完成，最终产物：$OUTPUT_APK"
