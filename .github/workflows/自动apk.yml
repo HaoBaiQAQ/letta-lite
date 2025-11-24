@@ -133,8 +133,8 @@ jobs:
 
       - name: 生成Java对接代码（自动识别Rust API）
         run: |
-          # 基于官方的CORE_DIR（core/）生成C头文件
-          cbindgen --lang c --output letta_api.h --source ${{ env.CORE_DIR }}
+          # 修正：去掉--source，直接将CORE_DIR作为输入目录
+          cbindgen --lang c --output letta_api.h ${{ env.CORE_DIR }}
           echo "✅ Java对接代码头文件生成完成"
 
       - name: 拉取极简全功能UI模板（输入框+按钮+结果展示）
