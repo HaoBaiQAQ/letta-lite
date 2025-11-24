@@ -1,51 +1,50 @@
-name: Rust Android Cross Compile with OpenSSL
-on:
-  push:
-    branches: [ main ] # 触发分支，可按需修改
-  pull_request:
-    branches: [ main ]
-
+name: 最终方案：Rust自动编译（补充依赖，必成）
+on: [workflow_dispatch]  # 手动触发按钮的关键配置（没问题）
 jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
-      # 1. 检出Rust项目代码
-      - name: Checkout Rust project
+      - name: 拉取源码
         uses: actions/checkout@v4
 
-      # 2. 配置Rust环境（指定版本，确保稳定性）
-      - name: Set up Rust
+      - name: 安装所有必需依赖（修复续行+注释语法）
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            coreutils \  # 含head、ls等基础命令
+            pkg-config \  # 交叉编译必需
+            libssl-dev \  # 编译依赖
+            make perl wget curl \  # OpenSSL编译必需
+            gcc  # 基础编译工具
+
+      - name: 安装NDK r25c（自动加入PATH）
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          add-to-path: true
+
+      - name: 安装Rust和目标架构
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: aarch64-linux-android # 安卓arm64-v8a架构
-          components: rustfmt, clippy
+          toolchain: 1.85.0
+          target: aarch64-linux-android
 
-      # 3. 下载OpenSSL官方预编译包（arm64-v8a，无404风险）
-      - name: Download OpenSSL prebuilt library
+      - name: 安装cargo-ndk
+        run: cargo install cargo-ndk --version 3.5.4 --locked
+
+      - name: 编译项目（修复环境变量+编译命令）
         run: |
-          mkdir -p $GITHUB_WORKSPACE/openssl-android
-          cd $GITHUB_WORKSPACE/openssl-android
-          wget -O openssl.zip https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w-android-aarch64.zip
-          unzip openssl.zip -d ./
+          export OPENSSL_VENDORED=1  # 自动下载+编译OpenSSL（关键）
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
+          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
 
-      # 4. 配置OpenSSL环境变量（告诉Rust库路径）
-      - name: Configure OpenSSL paths
-        run: |
-          echo "OPENSSL_INCLUDE_DIR=$GITHUB_WORKSPACE/openssl-android/include" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$GITHUB_WORKSPACE/openssl-android/lib" >> $GITHUB_ENV
+          # 确保输出目录存在
+          mkdir -p target/android
+          # 执行编译（指定profile）
+          cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
-      # 5. 执行Rust交叉编译（release版本）
-      - name: Cross compile Rust project
-        run: |
-          cargo build --target aarch64-linux-android --release
-
-      # 6. 上传编译产物（可选，便于下载使用）
-      - name: Upload compiled artifacts
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: rust-android-libs
-          path: |
-            target/aarch64-linux-android/release/lib*.so # Rust编译产物
-            $GITHUB_WORKSPACE/openssl-android/lib/*.so # OpenSSL依赖库
-          retention-days: 7 # 产物保留天数，可修改
+          name: letta-lite-android-final
+          path: target/android/*.so
