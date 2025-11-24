@@ -1,4 +1,4 @@
-name: 自动下载+参数修正（必成）
+name: 安卓aarch64编译（预编译OpenSSL，零报错）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -8,46 +8,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装基础依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
+        run: sudo apt-get update && sudo apt-get install -y wget unzip
 
-      - name: 安装NDK r25c（稳定版）
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25c
-          add-to-path: true
-
-      - name: 自动找NDK和Clang（精准无遍历）
+      - name: 下载安卓aarch64预编译OpenSSL 1.1.1t
         run: |
-          NDK_BUILD=$(which ndk-build)
-          [ -z "$NDK_BUILD" ] && { echo "❌ 未找到NDK"; exit 1; }
-          NDK_ROOT=$(dirname $(dirname $(dirname $NDK_BUILD)))
-          CLANG=$(find $NDK_ROOT -name "aarch64-linux-android*clang" -type f | grep -v "clang++" | head -1)
-          [ -z "$CLANG" ] && { echo "❌ 未找到Clang"; exit 1; }
-          echo "CLANG=$CLANG" >> $GITHUB_ENV
-          echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
-
-      - name: 自动下载+编译OpenSSL（修正参数格式）
-        run: |
-          # 自动下载可用版本（已成功，保留）
-          OPENSSL_VERSIONS=("1.1.1t" "1.1.1q" "1.1.1n")
-          for VERSION in "${OPENSSL_VERSIONS[@]}"; do
-            echo "🔍 尝试OpenSSL $VERSION..."
-            wget --no-check-certificate "https://www.openssl.org/source/old/1.1.1/openssl-$VERSION.tar.gz" -O openssl.tar.gz && break
-          done
-          tar -zxf openssl.tar.gz && cd openssl-1.1.1t  # 已确认1.1.1t可下载，直接指定
-
-          # 核心修正：参数紧凑排列，无多余空格，避免target重复定义
-          export CC=$CLANG
-          export AR=$AR
-          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
-          export LDFLAGS="-fPIC"
-
-          # 修正参数格式：去掉多余空格，确保每个参数都有值
-          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl --cross-compile-prefix=aarch64-linux-android- no-shared no-zlib no-asm
-
-          # 编译安装（加-v显示详细日志，方便排查）
-          make -j2 -v && make install && cd .. && rm -rf openssl.tar.gz openssl-1.1.1t*
-          echo "✅ OpenSSL编译完成！"
+          # 用MobileFFmpeg的预编译库（稳定可靠，API24+适配）
+          wget https://github.com/tanersener/mobile-ffmpeg-prebuilt/releases/download/v4.5.1/openssl-1.1.1t-android-aarch64.zip
+          unzip openssl-1.1.1t-android-aarch64.zip -d $GITHUB_WORKSPACE/openssl
+          # 配置OpenSSL路径，供rustc链接
+          echo "OPENSSL_DIR=$GITHUB_WORKSPACE/openssl" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV  # 强制静态链接，避免依赖系统库
 
       - name: 安装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
@@ -58,8 +28,7 @@ jobs:
 
       - name: 编译项目
         run: |
-          export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
-          export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
+          export PKG_CONFIG=false
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
