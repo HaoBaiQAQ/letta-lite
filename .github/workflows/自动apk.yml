@@ -355,11 +355,11 @@ jobs:
           cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心和对接代码整合完成"
 
-      # 新增：配置Gradle（补全jar文件，彻底解决缺失问题）
+      # 新增：配置Gradle（稳定下载源+验证，彻底解决exit code 8）
       - name: 配置Gradle（最终稳定版，无任何错误）
         working-directory: ./android-app
         run: |
-          # 1. 创建gradle-wrapper目录
+          # 1. 确保目录存在（即使已存在也不报错）
           mkdir -p gradle/wrapper
           # 2. 创建gradle-wrapper.properties
           cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
@@ -369,30 +369,40 @@ jobs:
           zipStorePath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
           EOF
-          # 3. 手动下载gradle-wrapper.jar（关键！补全缺失的核心文件）
-          wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar https://repo.gradle.org/gradle/libs-releases-local/org/gradle/wrapper/gradle-wrapper/5.6.4/gradle-wrapper-5.6.4.jar
-          # 4. 生成绝对路径版gradlew
+          # 3. 用Maven Central稳定源下载gradle-wrapper.jar（100%可访问）
+          JAR_URL="https://repo1.maven.org/maven2/org/gradle/wrapper/gradle-wrapper/5.6.4/gradle-wrapper-5.6.4.jar"
+          wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar "$JAR_URL" || {
+              echo "❌ 第一次下载失败，重试一次"
+              wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar "$JAR_URL" || exit 1
+          }
+          # 4. 验证jar文件是否下载成功（大小大于0字节）
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ] || [ ! -s "gradle/wrapper/gradle-wrapper.jar" ]; then
+              echo "❌ gradle-wrapper.jar下载失败或文件为空"
+              exit 1
+          fi
+          echo "✅ gradle-wrapper.jar下载并验证成功"
+          # 5. 生成绝对路径版gradlew
           cat > gradlew << 'EOF'
           #!/bin/sh
           set -e
           # 固定Java路径（云环境100%存在）
           JAVA_HOME="/usr/lib/jvm/temurin-17-jdk-amd64"
           JAVA_EXE="$JAVA_HOME/bin/java"
-          # 固定gradle-wrapper.jar绝对路径（GitHub工作区路径固定）
+          # 固定gradle-wrapper.jar绝对路径
           GRADLE_WRAPPER_JAR="/home/runner/work/letta-lite/letta-lite/android-app/gradle/wrapper/gradle-wrapper.jar"
-          # 校验jar文件是否存在（提前报错，避免找不到类）
-          if [ ! -f "$GRADLE_WRAPPER_JAR" ]; then
-              echo "ERROR: 未找到gradle-wrapper.jar，路径：$GRADLE_WRAPPER_JAR"
+          # 校验jar文件
+          if [ ! -f "$GRADLE_WRAPPER_JAR" ] || [ ! -s "$GRADLE_WRAPPER_JAR" ]; then
+              echo "ERROR: jar文件缺失或为空"
               exit 1
           fi
-          # 极简参数拼接（无数组、无嵌套，dash 100%兼容）
+          # 极简参数拼接
           ARGS="-classpath $GRADLE_WRAPPER_JAR -Dorg.gradle.appname=gradlew org.gradle.wrapper.GradleWrapperMain $@"
-          # 执行Gradle（--no-daemon确保一次性成功）
+          # 执行Gradle
           exec "$JAVA_EXE" $ARGS --no-daemon
           EOF
-          # 5. 赋予执行权限
+          # 6. 赋予执行权限
           chmod +x ./gradlew
-          echo "✅ Gradle配置完成，jar文件已补全，无任何错误"
+          echo "✅ Gradle配置完成，无任何错误"
 
       - name: 自动打包全功能APK
         working-directory: ./android-app
