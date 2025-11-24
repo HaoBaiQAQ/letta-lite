@@ -3,7 +3,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use crate::error::{LettaError, Result};
 use crate::agent::AgentState;
-use async_trait::async_trait;
+// 修复：删除未使用的 async_trait 导入（警告解决）
+// use async_trait::async_trait;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSchema {
@@ -14,7 +15,8 @@ pub struct ToolSchema {
     pub required: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// 修复1：去掉 Clone 派生（Box<dyn ToolHandler> 无法自动 Clone，报错核心）
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Tool {
     pub schema: ToolSchema,
     #[serde(skip)]
@@ -90,15 +92,21 @@ impl ToolResult {
     }
 }
 
-pub trait ToolHandler: Send + Sync {
+// 修复2：给 ToolHandler 加 Debug 约束（解决 Tool 结构体 Debug 派生报错）
+pub trait ToolHandler: std::fmt::Debug + Send + Sync {
     fn execute(&self, args: &Value, state: &mut AgentState) -> Result<ToolResult>;
 }
 
 // Built-in tool handlers
+#[derive(Debug)] // 修复3：给内置工具 handler 加 Debug 实现（满足 ToolHandler 的 Debug 约束）
 pub struct MemoryReplaceHandler;
+#[derive(Debug)]
 pub struct MemoryAppendHandler;
+#[derive(Debug)]
 pub struct ArchivalInsertHandler;
+#[derive(Debug)]
 pub struct ArchivalSearchHandler;
+#[derive(Debug)]
 pub struct ConversationSearchHandler;
 
 impl ToolHandler for MemoryReplaceHandler {
@@ -211,7 +219,7 @@ impl ToolHandler for ConversationSearchHandler {
     }
 }
 
-#[derive(Clone)]
+// 修复4：去掉 Clone 派生（HashMap<..., Box<dyn ToolHandler>> 无法自动 Clone，报错解决）
 pub struct ToolExecutor {
     tools: HashMap<String, Box<dyn ToolHandler>>,
 }
@@ -313,3 +321,18 @@ impl ToolExecutor {
         ]
     }
 }
+
+// 可选：如果项目需要 ToolExecutor 可克隆，添加手动实现（按需启用）
+// impl Clone for ToolExecutor {
+//     fn clone(&self) -> Self {
+//         let mut tools = HashMap::new();
+//         // 内置工具都是无状态的，可重新创建实例实现克隆
+//         tools.insert("memory_replace".to_string(), Box::new(MemoryReplaceHandler));
+//         tools.insert("memory_append".to_string(), Box::new(MemoryAppendHandler));
+//         tools.insert("archival_insert".to_string(), Box::new(ArchivalInsertHandler));
+//         tools.insert("archival_search".to_string(), Box::new(ArchivalSearchHandler));
+//         tools.insert("conversation_search".to_string(), Box::new(ConversationSearchHandler));
+//         // 如需支持自定义工具克隆，需扩展逻辑
+//         Self { tools }
+//     }
+// }
