@@ -10,7 +10,6 @@ jobs:
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      # 明确产物输出目录
       OUTPUT_DIR: ${{ github.workspace }}/target/android
 
     steps:
@@ -23,24 +22,28 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      - name: 正确安装NDK 27.3.13750724（修复参数错误）
+      - name: 正确安装NDK（修复参数格式，单独指定每个包）
         uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: "latest"  # 必须配置：安装基础工具链
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }};platforms;android-${{ env.ANDROID_API_LEVEL }}"  # 正确指定NDK和API级别
-          accept-android-sdk-licenses: true  # 自动接受许可证
+          cmdline-tools-version: "11.0"  # 稳定版本，避免最新版兼容性问题
+          # 关键修复：每个包用逗号分隔，格式为「包名;版本」
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }},platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          accept-android-sdk-licenses: true
 
-      - name: 验证NDK配置
+      - name: 验证NDK路径（确保安装成功）
         run: |
+          if [ -z "$ANDROID_NDK_ROOT" ]; then
+            echo "❌ ANDROID_NDK_ROOT 未设置，NDK安装失败"
+            exit 1
+          fi
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           # 验证编译器存在
-          if [ -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "✅ 编译器存在"
-          else
-            echo "❌ 编译器缺失"
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 编译器缺失，列出工具链目录："
+            ls -l $NDK_TOOLCHAIN_BIN
             exit 1
           fi
 
@@ -50,15 +53,13 @@ jobs:
           cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          # 编译OpenSSL
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          ./Configure linux-aarch64 \
-            no-shared no-asm no-zlib \
+          ./Configure linux-aarch64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
             -fPIC -march=armv8-a \
@@ -75,42 +76,37 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 确保项目配置为cdylib（生成.so的关键）
+      - name: 强制添加cdylib配置（生成.so的核心）
         run: |
-          # 在Cargo.toml中添加cdylib类型（如果没有）
-          if ! grep -q "crate-type = \[\"cdylib\"" Cargo.toml; then
-            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> Cargo.toml
-            echo "✅ 已添加cdylib配置"
-          fi
-          # 显示Cargo.toml配置，确认生效
-          cat Cargo.toml | grep -A 2 "\[lib\]"
+          # 直接覆盖[lib]配置，确保是cdylib
+          echo -e "[lib]\ncrate-type = [\"cdylib\"]\nname = \"letta_lite\"" > Cargo.toml.tmp
+          cat Cargo.toml >> Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+          echo "✅ 已强制配置cdylib，Cargo.toml关键配置："
+          cat Cargo.toml | grep -A 3 "\[lib\]"
 
-      - name: 清理缓存并编译（强制生成.so）
+      - name: 编译Rust项目（确保生成.so）
         run: |
           cargo clean
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
-          # 关键：添加--release，确保生成release版本.so；-o指定输出目录
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build --profile mobile --release
-          # 调试：列出产物目录结构，确认.so存在
-          echo "✅ 产物目录结构："
+          # 不用--profile mobile，直接用--release，避免profile配置影响产物
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build --release
+          # 调试：列出所有可能的产物路径
+          echo "✅ 目标输出目录产物："
           ls -l ${{ env.OUTPUT_DIR }}
-          # 如果产物在默认路径，复制到指定目录
-          if [ -z "$(ls -A ${{ env.OUTPUT_DIR }})" ]; then
-            echo "⚠️  目标目录无产物，尝试复制默认路径产物"
-            mkdir -p ${{ env.OUTPUT_DIR }}
-            cp target/${{ env.TARGET_ARCH }}/release/lib*.so ${{ env.OUTPUT_DIR }}/
-            ls -l ${{ env.OUTPUT_DIR }}
-          fi
+          echo "✅ 默认release目录产物："
+          ls -l target/${{ env.TARGET_ARCH }}/release/
+          # 收集所有.so文件到输出目录
+          find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
+          echo "✅ 最终收集的产物："
+          ls -l ${{ env.OUTPUT_DIR }}
 
-      - name: 上传产物（兼容多种路径）
+      - name: 上传产物（确保能找到）
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite-android-so
-          # 匹配target/android和默认路径的.so文件，确保不遗漏
-          path: |
-            ${{ env.OUTPUT_DIR }}/*.so
-            target/${{ env.TARGET_ARCH }}/release/*.so
+          path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
