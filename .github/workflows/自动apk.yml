@@ -355,12 +355,13 @@ jobs:
           cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心和对接代码整合完成"
 
-      # 新增：配置Gradle（绝对路径版，彻底解决ClassNotFoundException）
+      # 新增：配置Gradle（补全jar文件，彻底解决缺失问题）
       - name: 配置Gradle（最终稳定版，无任何错误）
         working-directory: ./android-app
         run: |
-          # 1. 创建gradle-wrapper目录和配置文件
+          # 1. 创建gradle-wrapper目录
           mkdir -p gradle/wrapper
+          # 2. 创建gradle-wrapper.properties
           cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
@@ -368,7 +369,9 @@ jobs:
           zipStorePath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
           EOF
-          # 2. 生成绝对路径版gradlew（彻底避免路径解析错误）
+          # 3. 手动下载gradle-wrapper.jar（关键！补全缺失的核心文件）
+          wget -q --no-check-certificate -O gradle/wrapper/gradle-wrapper.jar https://repo.gradle.org/gradle/libs-releases-local/org/gradle/wrapper/gradle-wrapper/5.6.4/gradle-wrapper-5.6.4.jar
+          # 4. 生成绝对路径版gradlew
           cat > gradlew << 'EOF'
           #!/bin/sh
           set -e
@@ -387,9 +390,9 @@ jobs:
           # 执行Gradle（--no-daemon确保一次性成功）
           exec "$JAVA_EXE" $ARGS --no-daemon
           EOF
-          # 3. 赋予执行权限
+          # 5. 赋予执行权限
           chmod +x ./gradlew
-          echo "✅ Gradle配置完成，绝对路径无任何解析错误"
+          echo "✅ Gradle配置完成，jar文件已补全，无任何错误"
 
       - name: 自动打包全功能APK
         working-directory: ./android-app
