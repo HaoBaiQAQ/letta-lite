@@ -15,10 +15,345 @@ jobs:
       CORE_PACKAGE_NAME: "letta-core"  # 子包名（正确）
 
     steps:
-      # 前面所有步骤不变，直接复制之前的内容...
+      - name: 拉取letta-lite源码
+        uses: actions/checkout@v4
+
+      - name: 安装基础依赖
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            coreutils pkg-config make perl wget curl gcc cmake \
+            libssl-dev zlib1g-dev
+
+      - name: 正确安装NDK（空格分隔包）
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+
+      - name: 验证NDK
+        run: |
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ 未找到NDK"
+            exit 1
+          fi
+          export ANDROID_NDK_ROOT=$NDK_PATH
+          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 编译器缺失"
+            exit 1
+          fi
+          echo "✅ NDK验证通过"
+
+      - name: 下载并编译OpenSSL
+        run: |
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          ./Configure linux-aarch64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          make -j$(nproc) V=1
+          make install_sw && echo "✅ OpenSSL编译完成"
+
+      - name: 配置Rust环境
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          target: ${{ env.TARGET_ARCH }}
+
+      - name: 安装cargo-ndk
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: 修复工作区配置
+        run: |
+          # 清理根目录无效配置
+          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
+          echo "✅ 已清理根目录Cargo.toml"
+
+          # 验证子包路径
+          CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
+          if [ ! -f "$CORE_CARGO" ]; then
+            echo "❌ 子包目录不存在"
+            ls -l */Cargo.toml
+            exit 1
+          fi
+
+          # 添加cdylib配置（生成.so核心）
+          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+            echo "✅ 已添加cdylib配置"
+          fi
+          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
+
+      - name: 编译核心子包（改用 --profile mobile）
+        run: |
+          cargo clean
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export PKG_CONFIG_ALLOW_CROSS=1
+          # 关键修改：把 --release 换成 --profile mobile
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build \
+            --package ${{ env.CORE_PACKAGE_NAME }} \
+            --profile mobile
+          echo "✅ 编译完成，产物目录："
+          ls -l ${{ env.OUTPUT_DIR }}
+          # 兜底收集所有.so文件，避免路径问题
+          find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
+          echo "✅ 最终产物列表："
+          ls -l ${{ env.OUTPUT_DIR }}
+
+      - name: 上传.so产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: letta-lite-android-so-mobile
+          path: ${{ env.OUTPUT_DIR }}/*.so
+          retention-days: 14
 
       # -------------------------- 以下是新增的自动打包APK步骤（本地创建UI，无外部依赖） --------------------------
-      # （前面的“安装APK打包依赖”“生成Java对接代码”“本地创建极简UI文件”“整合.so和对接代码”步骤不变）
+      - name: 安装APK打包依赖（云侧临时安装，不影响原有逻辑）
+        run: |
+          # 安装生成Java对接代码的工具
+          cargo install cbindgen
+          # 安装安卓打包工具gradle和JDK
+          sudo apt-get update && sudo apt-get install -y gradle openjdk-17-jdk
+
+      - name: 生成Java对接代码（自动识别Rust API）
+        run: |
+          # 修正：去掉--source，直接将CORE_DIR作为输入目录
+          cbindgen --lang c --output letta_api.h ${{ env.CORE_DIR }}
+          echo "✅ Java对接代码头文件生成完成"
+
+      - name: 本地创建极简UI文件（不依赖外部仓库，稳定无报错）
+        run: |
+          # 创建安卓项目目录结构（修正：按标准安卓项目结构创建，避免路径错误）
+          mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
+          # 1. 创建UI布局文件（输入框+发送按钮+结果展示区+工具确认按钮）
+          cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="16dp">
+              <!-- 结果展示区（占满大部分屏幕） -->
+              <TextView
+                  android:id="@+id/resultView"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:hint="等待Lettalite回复..."
+                  android:textSize="16sp"
+                  android:lineSpacingExtra="4dp"/>
+              <!-- 输入框 -->
+              <EditText
+                  android:id="@+id/inputEdit"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:hint="输入你的指令（比如：帮我列个周末计划）..."
+                  android:layout_marginBottom="8dp"
+                  android:inputType="textMultiLine"/>
+              <!-- 发送按钮 -->
+              <Button
+                  android:id="@+id/sendBtn"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="发送"
+                  android:backgroundTint="#2196F3"
+                  android:textColor="@android:color/white"/>
+              <!-- 工具调用确认按钮（默认隐藏，需要时显示） -->
+              <LinearLayout
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:layout_marginTop="8dp">
+                  <Button
+                      android:id="@+id/allowBtn"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="允许工具调用"
+                      android:backgroundTint="#4CAF50"
+                      android:textColor="@android:color/white"
+                      android:layout_marginRight="8dp"
+                      android:visibility="gone"/>
+                  <Button
+                      android:id="@+id/denyBtn"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="拒绝工具调用"
+                      android:backgroundTint="#F44336"
+                      android:textColor="@android:color/white"
+                      android:visibility="gone"/>
+              </LinearLayout>
+          </LinearLayout>
+          EOF
+          # 2. 创建MainActivity（绑定UI和Rust .so，实现全功能交互）
+          cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
+          package com.letta.app;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.TextView;
+          import androidx.appcompat.app.AppCompatActivity;
+          // 加载Rust编译的核心.so库（库名和编译产物一致）
+          static {
+              System.loadLibrary("letta-core");
+          }
+          public class MainActivity extends AppCompatActivity {
+              // UI组件
+              private EditText inputEdit;
+              private TextView resultView;
+              private Button sendBtn, allowBtn, denyBtn;
+              // Rust核心上下文（用于维持对话状态）
+              private long ctx;
+              // 声明Rust导出的3个核心API（和Rust源码的#[no_mangle]函数对应）
+              // 1. 初始化Rust核心
+              public native long letta_init();
+              // 2. 发送用户输入给Rust，返回处理结果
+              public native String letta_send_input(long ctx, String input);
+              // 3. 确认工具调用（允许/拒绝），返回后续结果
+              public native String letta_confirm_tool(long ctx, boolean confirm);
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_main);
+                  // 初始化UI组件
+                  initView();
+                  // 初始化Rust核心（启动对话上下文）
+                  ctx = letta_init();
+                  // 绑定按钮点击事件
+                  bindEvents();
+              }
+              // 初始化UI组件
+              private void initView() {
+                  inputEdit = findViewById(R.id.inputEdit);
+                  resultView = findViewById(R.id.resultView);
+                  sendBtn = findViewById(R.id.sendBtn);
+                  allowBtn = findViewById(R.id.allowBtn);
+                  denyBtn = findViewById(R.id.denyBtn);
+              }
+              // 绑定按钮点击事件
+              private void bindEvents() {
+                  // 发送按钮：用户输入→传给Rust→展示结果
+                  sendBtn.setOnClickListener(v -> {
+                      String input = inputEdit.getText().toString().trim();
+                      if (!input.isEmpty()) {
+                          // 清空输入框
+                          inputEdit.setText("");
+                          // 调用Rust API，获取结果
+                          String result = letta_send_input(ctx, input);
+                          // 展示结果到UI
+                          resultView.setText(result);
+                          // 如果结果包含"是否允许"，说明需要工具调用确认，显示按钮
+                          if (result.contains("是否允许") || result.contains("需要调用")) {
+                              allowBtn.setVisibility(View.VISIBLE);
+                              denyBtn.setVisibility(View.VISIBLE);
+                          } else {
+                              allowBtn.setVisibility(View.GONE);
+                              denyBtn.setVisibility(View.GONE);
+                          }
+                      }
+                  });
+                  // 允许工具调用
+                  allowBtn.setOnClickListener(v -> {
+                      String result = letta_confirm_tool(ctx, true);
+                      resultView.setText(result);
+                      // 隐藏确认按钮
+                      allowBtn.setVisibility(View.GONE);
+                      denyBtn.setVisibility(View.GONE);
+                  });
+                  // 拒绝工具调用
+                  denyBtn.setOnClickListener(v -> {
+                      String result = letta_confirm_tool(ctx, false);
+                      resultView.setText(result);
+                      // 隐藏确认按钮
+                      allowBtn.setVisibility(View.GONE);
+                      denyBtn.setVisibility(View.GONE);
+                  });
+              }
+          }
+          EOF
+          # 3. 创建安卓构建配置文件（build.gradle）—— 最终兼容配置
+          cat > android-app/build.gradle << 'EOF'
+          buildscript {
+              repositories {
+                  maven { url 'https://maven.google.com' }
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:3.6.4'
+              }
+          }
+          apply plugin: 'com.android.application'
+          android {
+              compileSdkVersion 33
+              defaultConfig {
+                  applicationId "com.letta.app"
+                  minSdkVersion 24
+                  targetSdkVersion 33
+                  versionCode 1
+                  versionName "1.0"
+                  ndk {
+                      abiFilters "arm64-v8a"
+                  }
+                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+              }
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+              sourceSets {
+                  main {
+                      java.srcDirs = ['src/main/java']
+                      res.srcDirs = ['src/main/res']
+                      jniLibs.srcDirs = ['src/main/jniLibs']
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = '1.8'
+                  targetCompatibility = '1.8'
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.2.0'
+              implementation 'com.google.android.material:material:1.3.0'
+              testImplementation 'junit:junit:4.13.2'
+              androidTestImplementation 'androidx.test.ext:junit:1.1.2'
+              androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
+          }
+          EOF
+          # 4. 创建settings.gradle
+          cat > android-app/settings.gradle << 'EOF'
+          rootProject.name = "LettaliteApp"
+          include ':app'
+          EOF
+          echo "✅ 本地创建UI文件完成，无外部依赖，稳定可靠"
+
+      - name: 整合.so和对接代码到UI项目
+        run: |
+          # 创建jniLibs目录（存放.so和头文件）
+          mkdir -p android-app/src/main/jniLibs/arm64-v8a/
+          # 复制Rust编译的.so文件（从官方输出目录获取）
+          cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
+          # 复制生成的Java对接头文件
+          cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
+          echo "✅ .so核心和对接代码整合完成"
 
       # 新增：强制升级Gradle到5.6.4（兼容Android插件3.6.4）—— 修复gradlew不存在问题
       - name: 配置Gradle版本（生成gradlew脚本，确保可执行）
@@ -27,31 +362,31 @@ jobs:
           # 1. 创建gradle-wrapper目录
           mkdir -p gradle/wrapper
           # 2. 创建gradle-wrapper.properties（指定Gradle版本）
-          cat > gradle/wrapper/gradle-wrapper.properties << EOF
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
           EOF
-          # 3. 手动生成gradlew（Linux/Mac可执行脚本）
-          cat > gradlew << EOF
+          # 3. 手动生成gradlew（Linux/Mac可执行脚本）—— 修复重复参数问题
+          cat > gradlew << 'EOF'
           #!/usr/bin/env sh
-         ##############################################################################
+          ##############################################################################
           # Gradle start up script for UN*X
-         ##############################################################################
+          ##############################################################################
           # Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
           DEFAULT_JVM_OPTS=""
           APP_NAME="Gradle"
-          APP_BASE_NAME=\$(basename "\$0")
+          APP_BASE_NAME=$(basename "$0")
           # Use the maximum available, or set MAX_FD != -1 to use that value.
           MAX_FD="maximum"
           warn () {
-              echo "\$*"
+              echo "$*"
           }
           die () {
               echo
-              echo "\$*"
+              echo "$*"
               echo
               exit 1
           }
@@ -60,7 +395,7 @@ jobs:
           msys=false
           darwin=false
           nonstop=false
-          case "\$(uname)" in
+          case "$(uname)" in
             CYGWIN* )
               cygwin=true
               ;;
@@ -75,15 +410,15 @@ jobs:
               ;;
           esac
           # For Cygwin, ensure paths are in UNIX format before anything is touched.
-          if \$cygwin; then
-              [ -n "\$JAVA_HOME" ] && JAVA_HOME=\$(cygpath --unix "\$JAVA_HOME")
+          if $cygwin; then
+              [ -n "$JAVA_HOME" ] && JAVA_HOME=$(cygpath --unix "$JAVA_HOME")
           fi
           # Attempt to set JAVA_HOME if it's not set.
-          if [ -z "\$JAVA_HOME" ]; then
-              if \$darwin; then
+          if [ -z "$JAVA_HOME" ]; then
+              if $darwin; then
                   # OSX has a different structure
                   if [ -x "/usr/libexec/java_home" ]; then
-                      export JAVA_HOME=\$(/usr/libexec/java_home)
+                      export JAVA_HOME=$(/usr/libexec/java_home)
                   else
                       warn "JAVA_HOME is not set and no 'java' command could be found in your PATH."
                       warn "Please set the JAVA_HOME variable in your environment to match the"
@@ -99,50 +434,44 @@ jobs:
                       exit 1
                   fi
                   # Get JAVA_HOME from java's path
-                  JAVA_HOME=\$(dirname \$(dirname \$(command -v java)))
+                  JAVA_HOME=$(dirname $(dirname $(command -v java)))
               fi
           fi
           # Ensure JAVA_HOME exists
-          if [ ! -d "\$JAVA_HOME" ]; then
-              die "JAVA_HOME is set to an invalid directory: \$JAVA_HOME"
+          if [ ! -d "$JAVA_HOME" ]; then
+              die "JAVA_HOME is set to an invalid directory: $JAVA_HOME"
           fi
-          JAVA_EXE="\$JAVA_HOME/bin/java"
-          if [ ! -x "\$JAVA_EXE" ]; then
-              die "JAVA_HOME is set to an invalid directory: \$JAVA_HOME"
+          JAVA_EXE="$JAVA_HOME/bin/java"
+          if [ ! -x "$JAVA_EXE" ]; then
+              die "JAVA_HOME is set to an invalid directory: $JAVA_HOME"
               die "Please set the JAVA_HOME variable in your environment to match the"
               die "location of your Java installation."
           fi
           # Collect all arguments for the java command, following the shell quoting and substitution rules.
           args=()
-          args+=("\$DEFAULT_JVM_OPTS")
-          args+=("\$JAVA_OPTS")
-          args+=("\$GRADLE_OPTS")
-          args+=("-Dorg.gradle.appname=\$APP_BASE_NAME")
+          args+=("$DEFAULT_JVM_OPTS")
+          args+=("$JAVA_OPTS")
+          args+=("$GRADLE_OPTS")
+          args+=("-Dorg.gradle.appname=$APP_BASE_NAME")
           args+=("-classpath")
-          args+=("\$(dirname "\$0")/gradle/wrapper/gradle-wrapper.jar")
-          args+=("org.gradle.wrapper.GradleWrapperMain")
-              args+=("\$JAVA_OPTS")
-          args+=("\$GRADLE_OPTS")
-          args+=("-Dorg.gradle.appname=\$APP_BASE_NAME")
-          args+=("-classpath")
-          args+=("\$(dirname "\$0")/gradle/wrapper/gradle-wrapper.jar")
+          args+=("$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar")
           args+=("org.gradle.wrapper.GradleWrapperMain")
           # By default, we use the terminal for input/output. However, in some cases we need to disable this.
-          if \$cygwin || \$msys; then
-              APP_HOME=\$(cygpath --path --mixed "\$(dirname "\$0")")
+          if $cygwin || $msys; then
+              APP_HOME=$(cygpath --path --mixed "$(dirname "$0")")
               args+=("-Dorg.gradle.native=false")
           else
-              APP_HOME=\$(dirname "\$0")
+              APP_HOME=$(dirname "$0")
           fi
           # For nonstop, we need to disable the terminal
-          if \$nonstop; then
+          if $nonstop; then
               args+=("-Dorg.gradle.native=false")
           fi
           # Execute Java with the collected arguments
-          exec "\$JAVA_EXE" "\${args[@]}" "\$@"
+          exec "$JAVA_EXE" "${args[@]}" "$@"
           EOF
           # 4. 生成gradlew.bat（Windows脚本，云环境用不上但确保完整）
-          cat > gradlew.bat << EOF
+          cat > gradlew.bat << 'EOF'
           @if "%DEBUG%" == "" @echo off
           @rem ##########################################################################
           @rem
