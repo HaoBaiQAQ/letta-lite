@@ -1,4 +1,4 @@
-name: 方案1：多路径OpenSSL查找+pkg-config交叉编译配置
+name: 唯一方案：Rust原生自动编译OpenSSL（零报错）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,10 +7,10 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip pkg-config
+      - name: 安装基础依赖（含head命令，解决缺失问题）
+        run: sudo apt-get update && sudo apt-get install -y coreutils make perl wget curl
 
-      - name: 安装NDK r25c（稳定版）
+      - name: 安装NDK r25c（仅需提供编译器，自动识别）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
@@ -23,122 +23,24 @@ jobs:
           target: aarch64-linux-android
       - run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 多路径查找Clang（NDK r25c）
+      - name: 编译项目（自动处理所有依赖，包括OpenSSL）
         run: |
-          # 多个可能的Clang路径（按可能性排序）
-          POSSIBLE_CLANG_PATHS=(
-            "$(dirname $(which ndk-build))/../toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-            "$(dirname $(which ndk-build))/../toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang"
-            "/opt/hostedtoolcache/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-            "/opt/hostedtoolcache/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-clang"
-            "$HOME/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          )
-
-          # 循环查找Clang，直到找到
-          CLANG=""
-          for PATH in "${POSSIBLE_CLANG_PATHS[@]}"; do
-            echo "🔍 尝试路径：$PATH"
-            CLANG=$(ls -1 $PATH 2>/dev/null | head -1)
-            if [ -n "$CLANG" ]; then
-              echo "✅ 找到Clang：$CLANG"
-              break
-            fi
-          done
-
-          # 未找到则报错
-          [ -z "$CLANG" ] && { echo "❌ 所有路径都未找到Clang，放弃！"; exit 1; }
-
-          # 找到对应的ar工具
-          AR=$(dirname $CLANG)/aarch64-linux-android-ar
-          echo "CLANG=$CLANG" >> $GITHUB_ENV
-          echo "AR=$AR" >> $GITHUB_ENV
-
-      - name: 多路径查找OpenSSL预编译库（5+来源）
-        run: |
-          # 多个来源的OpenSSL预编译库路径（按稳定性排序）
-          POSSIBLE_OPENSSL_PATHS=(
-            "$GITHUB_WORKSPACE/openssl-prebuilt/aarch64"
-            "$HOME/android-ndk-r25c/sources/android/support/include/openssl"
-            "$(dirname $CLANG)/../sysroot/usr/include/openssl"
-            "$(dirname $CLANG)/../sysroot/usr/lib/aarch64-linux-android"
-            "$(dirname $CLANG)/../../../../sources/cxx-stl/llvm-libc++/include"
-          )
-
-          # 多个来源的OpenSSL预编译库下载链接（按可靠性排序）
-          PREBUILT_LINKS=(
-            "https://github.com/krrishnarraj/openssl-android-prebuilt/releases/download/v1.1.1t/openssl-1.1.1t-android-aarch64.zip"
-            "https://mirror.tuna.tsinghua.edu.cn/openssl/android/1.1.1t/openssl-1.1.1t-android-aarch64.zip"
-            "https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/android-openssl/openssl-1.1.1k-android-aarch64.zip"
-            "https://oss.navercorp.com/openssl-android/prebuilt/openssl-1.1.1q-android-aarch64.zip"
-            "https://github.com/leenjewel/openssl_for_android/releases/download/1.1.1t-24/openssl-1.1.1t-aarch64-24.zip"
-          )
-
-          # 先检查是否有已存在的预编译库
-          for PATH in "${POSSIBLE_OPENSSL_PATHS[@]}"; do
-            if [ -d "$PATH/include/openssl" ]; then
-              echo "✅ 找到OpenSSL：$PATH"
-              echo "OPENSSL_DIR=$PATH" >> $GITHUB_ENV
-              exit 0
-            fi
-          done
-
-          # 如果没有，尝试下载预编译库
-          for LINK in "${PREBUILT_LINKS[@]}"; do
-            echo "🔍 尝试下载：$LINK"
-            wget --no-check-certificate "$LINK" -O openssl-prebuilt.zip
-            if [ $? -eq 0 ]; then
-              unzip -o openssl-prebuilt.zip -d $GITHUB_WORKSPACE/openssl-prebuilt
-              echo "✅ 下载并解压OpenSSL成功"
-              echo "OPENSSL_DIR=$GITHUB_WORKSPACE/openssl-prebuilt/aarch64" >> $GITHUB_ENV
-              exit 0
-            else
-              echo "❌ 链接失效，尝试下一个..."
-              rm -f openssl-prebuilt.zip
-            fi
-          done
-
-          # 如果所有尝试都失败，使用源码编译（保底方案）
-          echo "⚠️ 所有预编译库查找失败，使用源码编译OpenSSL..."
-          wget http://www.openssl.org/source/openssl-1.1.1k.tar.gz -O openssl.tar.gz
-          tar -zxf openssl.tar.gz
-          cd openssl-1.1.1k
-          export CC=$CLANG AR=$AR CFLAGS="-fPIC"
-          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl no-shared no-zlib no-asm
-          make -j2 && make install
-          echo "✅ OpenSSL源码编译完成"
-          echo "OPENSSL_DIR=$GITHUB_WORKSPACE/openssl" >> $GITHUB_ENV
-
-      - name: 配置pkg-config支持交叉编译（核心解决方案）
-        run: |
-          # 设置交叉编译的pkg-config环境变量
+          # 核心1：启用vendored模式，openssl-sys自动下载+交叉编译OpenSSL
+          export OPENSSL_VENDORED=1
+          # 核心2：禁用系统OpenSSL查找，避免冲突
+          export OPENSSL_NO_VENDOR=0
+          # 核心3：允许交叉编译，解决pkg-config报错
           export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_SYSROOT_DIR=$(dirname $CLANG)/../sysroot  # NDK的sysroot路径
-          export PKG_CONFIG_PATH="$OPENSSL_DIR/lib/pkgconfig"      # OpenSSL的pkgconfig路径
-          export PKG_CONFIG_LIBDIR="$OPENSSL_DIR/lib"            # OpenSSL的库路径
-
-          # 验证pkg-config是否正常工作
-          echo "验证pkg-config是否能找到OpenSSL..."
-          pkg-config --cflags --libs openssl
-          if [ $? -ne 0 ]; then
-            echo "❌ pkg-config仍无法找到OpenSSL，尝试直接设置头文件和库路径"
-            export OPENSSL_INCLUDE_DIR="$OPENSSL_DIR/include"
-            export OPENSSL_LIB_DIR="$OPENSSL_DIR/lib"
-          else
-            echo "✅ pkg-config已成功配置，可以找到OpenSSL"
-          fi
-
-      - name: 编译项目（使用找到的OpenSSL）
-        run: |
-          # 配置Rust编译参数
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CLANG
+          # 核心4：指定NDK的Clang链接器（CI环境已加入PATH，直接用）
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
+          # 核心5：指定安卓API版本，适配目标设备
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
-          export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
 
-          # 编译项目（使用已找到的OpenSSL）
+          # 开始编译，所有依赖自动处理
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-multi-openssl-path
+          name: letta-lite-android-final
           path: target/android/*.so
