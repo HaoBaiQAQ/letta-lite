@@ -7,10 +7,9 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      # 修正为官方存在的NDK稳定版本（r27）
+      # 官方确认存在的NDK r27稳定版本（必须用这个，其他版本可能找不到）
       ANDROID_NDK_VERSION: 27.0.11718014
-      # 保持Android 7.0+（API 24）不变
-      ANDROID_API_LEVEL: 24
+      ANDROID_API_LEVEL: 24  # 保持Android 7.0+不变
       TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
@@ -19,7 +18,7 @@ jobs:
       CORE_DIR: "core"
       CORE_PACKAGE_NAME: "letta-core"
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      # 改用稳定的构建工具版本（兼容API 24）
+      # 稳定的构建工具版本（v3插件能稳定获取）
       BUILD_TOOLS_VERSION: 30.0.3
       # 你的文件存放目录
       ASSETS_DIR: ${{ github.workspace }}/anzhuoshifangyingwenjian
@@ -45,38 +44,45 @@ jobs:
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk \
             libxml2-utils
 
-      - name: 安装Android SDK/NDK（升级插件到v4，修复数据源问题）
-        uses: android-actions/setup-android@v4  # 关键：升级到最新版插件
+      - name: 安装Android SDK/NDK（用v3插件+强制指定SDK工具版本）
+        uses: android-actions/setup-android@v3  # 插件实际存在的最新版
         with:
           accept-android-sdk-licenses: true
-          # 明确指定SDK命令行工具版本（避免数据源问题）
+          # 强制指定SDK命令行工具版本（v3插件能稳定识别，避免数据源问题）
           sdk-tools-version: 11076708
+          # 明确指定NDK、API、构建工具（用官方存在的版本）
           packages: |
             ndk;${{ env.ANDROID_NDK_VERSION }}
             platforms;android-${{ env.ANDROID_API_LEVEL }}
             build-tools;${{ env.BUILD_TOOLS_VERSION }}
 
-      - name: 验证NDK和SDK工具
+      - name: 验证NDK和SDK工具（动态查找，容错性更强）
         run: |
-          # 动态查找NDK路径（避免版本号拼写错误）
-          NDK_PATH=$(find $ANDROID_SDK_ROOT/ndk -maxdepth 1 -type d | head -1)
-          if [ -z "$NDK_PATH" ]; then echo "❌ NDK安装失败"; exit 1; fi
+          # 动态查找NDK（不管版本号前缀，找到第一个安装的NDK）
+          NDK_PATH=$(find $ANDROID_SDK_ROOT/ndk -maxdepth 1 -type d | grep -E '^.*/[0-9.]+$' | head -1)
+          if [ -z "$NDK_PATH" ]; then 
+            echo "❌ NDK安装失败，已安装的NDK目录："; ls -l $ANDROID_SDK_ROOT/ndk/; exit 1; 
+          fi
           export ANDROID_NDK_ROOT=$NDK_PATH
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           
-          # 验证NDK编译器存在
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/$TARGET_ARCH$ANDROID_API_LEVEL-clang" ]; then
-            echo "❌ NDK编译器缺失"; exit 1; fi
+          # 验证NDK编译器（兼容不同NDK版本的路径）
+          CLANG_PATH=$(find $NDK_TOOLCHAIN_BIN -name "${TARGET_ARCH}*-clang" | head -1)
+          if [ -z "$CLANG_PATH" ]; then 
+            echo "❌ NDK编译器缺失，已有的编译器："; ls -l $NDK_TOOLCHAIN_BIN/*clang; exit 1; 
+          fi
+          echo "✅ NDK编译器找到：$CLANG_PATH"
 
           # 动态查找构建工具（避免路径错误）
           AAPT_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name aapt -type f | head -1)
           DX_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name dx -type f | head -1)
           APKSIGNER_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name apksigner -type f | head -1)
           if [ -z "$AAPT_PATH" ] || [ -z "$DX_PATH" ] || [ -z "$APKSIGNER_PATH" ]; then
-            echo "❌ 构建工具缺失"; exit 1; fi
+            echo "❌ 构建工具缺失，已安装的build-tools："; ls -l $ANDROID_SDK_ROOT/build-tools/; exit 1; 
+          fi
           BUILD_TOOLS_BIN=$(dirname "$AAPT_PATH")
           echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
           echo "✅ NDK和SDK工具验证通过"
@@ -87,7 +93,8 @@ jobs:
           cd $OPENSSL_SRC_DIR
           wget -q https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz
           tar -xvzf openssl-$OPENSSL_VERSION.tar.gz --strip-components=1
-          export CC="$NDK_TOOLCHAIN_BIN/$TARGET_ARCH$ANDROID_API_LEVEL-clang"
+          # 使用动态找到的clang编译器
+          export CC="$CLANG_PATH"
           export CXX="${CC}++"
           export AR="$NDK_TOOLCHAIN_BIN/llvm-ar"
           export RANLIB="$NDK_TOOLCHAIN_BIN/llvm-ranlib"
