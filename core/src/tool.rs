@@ -313,11 +313,11 @@ impl ToolExecutor {
     }
 }
 
-// 已启用 ToolExecutor Clone 实现（无状态工具完全无副作用）
+// 修复核心：显式指定 HashMap 类型为 Box<dyn ToolHandler>，避免自动推断错误
 impl Clone for ToolExecutor {
     fn clone(&self) -> Self {
-        let mut tools = HashMap::new();
-        // 内置工具重新创建实例，与原实例完全等价
+        // 关键修复：显式指定类型，所有工具都被当作 ToolHandler  trait 对象
+        let mut tools: HashMap<String, Box<dyn ToolHandler>> = HashMap::new();
         tools.insert("memory_replace".to_string(), Box::new(MemoryReplaceHandler));
         tools.insert("memory_append".to_string(), Box::new(MemoryAppendHandler));
         tools.insert("archival_insert".to_string(), Box::new(ArchivalInsertHandler));
