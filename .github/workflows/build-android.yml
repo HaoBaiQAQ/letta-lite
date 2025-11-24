@@ -1,5 +1,5 @@
-name: 终极方案：Rust安卓编译（OpenSSL 1.1.1w+NDK r25c）
-on: [workflow_dispatch]
+name: 终极方案：Rust安卓编译（必出按钮版）
+on: [workflow_dispatch]  # 手动触发按钮的核心，绝对不能删
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -10,88 +10,84 @@ jobs:
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      NDK_TOOLCHAIN_BIN: ${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin
 
     steps:
       - name: 拉取Rust项目源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖（无系统OpenSSL干扰）
+      - name: 安装基础依赖
         run: |
           sudo apt-get update && sudo apt-get install -y \
             coreutils pkg-config make perl wget curl gcc cmake
 
-      - name: 官方安装NDK r25c（强制锁定版本）
+      - name: 官方安装NDK r25c（强制生效）
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           api-level: ${{ env.ANDROID_API_LEVEL }}
       - run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
-          echo "✅ LLVM工具链路径：$NDK_TOOLCHAIN_BIN"
-          # 验证clang编译器存在
-          ls $NDK_TOOLCHAIN_BIN/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang && echo "✅ 编译器存在"
+          # 动态定义工具链路径（避免提前引用变量）
+          echo "NDK_TOOLCHAIN_BIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+          # 验证编译器存在
+          ls ${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang && echo "✅ 编译器存在"
 
-      - name: 下载OpenSSL 1.1.1w源码（官方稳定版）
+      - name: 下载OpenSSL 1.1.1w源码
         run: |
-          mkdir -p $OPENSSL_SRC_DIR $OPENSSL_INSTALL_DIR
-          cd $OPENSSL_SRC_DIR
-          wget -q -O openssl-${OPENSSL_VERSION}.tar.gz https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
-          tar -xvzf openssl-${OPENSSL_VERSION}.tar.gz --strip-components=1
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          wget -q -O openssl-${{ env.OPENSSL_VERSION }}.tar.gz https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
 
-      - name: 配置Rust环境（锁定工具链+目标架构）
+      - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（锁定3.5.4版本）
-        run: cargo install cargo-ndk --version 3.5.4 --locked
+      - name: 安装cargo-ndk（修正版本参数语法）
+        run: cargo install cargo-ndk --version=3.5.4 --locked  # 这里改了：--version=3.5.4
 
-      - name: 清理编译缓存（避免残留冲突）
+      - name: 清理编译缓存
         run: cargo clean
 
-      - name: 编译OpenSSL（绕开gcc检查+适配安卓）
+      - name: 编译OpenSSL（绕开gcc检查）
         run: |
-          cd $OPENSSL_SRC_DIR
-          # 配置安卓交叉编译工具链
-          export CC="$NDK_TOOLCHAIN_BIN/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
-          export CXX="$NDK_TOOLCHAIN_BIN/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang++"
-          export AR="$NDK_TOOLCHAIN_BIN/llvm-ar"
-          export RANLIB="$NDK_TOOLCHAIN_BIN/llvm-ranlib"
-          export LD="$NDK_TOOLCHAIN_BIN/ld.lld"
-          export SYSROOT="$ANDROID_NDK_ROOT/platforms/android-${ANDROID_API_LEVEL}/arch-aarch64"
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          # 用动态定义的工具链路径
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export SYSROOT="$ANDROID_NDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/arch-aarch64"
 
-          # 核心配置：linux-aarch64+安卓参数，禁用版本号
           ./Configure linux-aarch64 no-shared no-asm \
-            --prefix=$OPENSSL_INSTALL_DIR \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=$SYSROOT \
-            -D__ANDROID_API__=${ANDROID_API_LEVEL} \
-            -DOPENSSL_NO_VERSIONING \  # 适配安卓：禁用版本号
+            -D__ANDROID_API__=${{ env.ANDROID_API_LEVEL }} \
+            -DOPENSSL_NO_VERSIONING \
             -fPIC \
             -pie \
             -march=armv8-a \
             CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
 
-          # 编译安装（-j4加速，V=1打印详细日志）
           make -j4 V=1
-          make install_sw && echo "✅ OpenSSL编译安装完成"
+          make install_sw && echo "✅ OpenSSL编译完成"
 
-      - name: 编译Rust项目（指定手动编译的OpenSSL）
+      - name: 编译Rust项目
         run: |
-          # 明确指向安卓版OpenSSL，彻底屏蔽系统库
-          export OPENSSL_INCLUDE_DIR=$OPENSSL_INSTALL_DIR/include
-          export OPENSSL_LIB_DIR=$OPENSSL_INSTALL_DIR/lib
-          export OPENSSL_DIR=$OPENSSL_INSTALL_DIR
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_PATH=""
           export C_INCLUDE_PATH=""
           export LIBRARY_PATH=""
 
-          # 生成安卓可用的.so文件
           mkdir -p target/android
-          cargo ndk -t $TARGET_ARCH -o target/android build --profile mobile && echo "✅ Rust编译完成"
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile && echo "✅ Rust编译完成"
 
-      - name: 上传最终产物（安卓aarch64 .so文件）
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite-android-final
