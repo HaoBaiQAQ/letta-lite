@@ -1,4 +1,4 @@
-name: 最终方案：Rust自动编译（补充依赖，必成）
+name: 最终方案：Rust自动编译（修复OpenSSL冲突）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,20 +7,20 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需依赖（修复空包名问题）
+      - name: 安装依赖（去掉libssl-dev，避免系统OpenSSL干扰）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             coreutils \
             pkg-config \
-            libssl-dev \
             make perl wget curl \
             gcc
 
-      - name: 安装NDK r25c（自动加入PATH）
+      - name: 安装NDK r25c（指定版本，避免自动升级）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
+      - run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV  # 明确NDK路径
 
       - name: 安装Rust和目标架构
         uses: dtolnay/rust-toolchain@stable
@@ -31,12 +31,16 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目
+      - name: 编译项目（修复宏重复+强制OpenSSL自动编译）
         run: |
+          # 强制openssl-sys自动下载+交叉编译安卓版OpenSSL
           export OPENSSL_VENDORED=1
+          # 允许交叉编译的pkg-config
           export PKG_CONFIG_ALLOW_CROSS=1
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
-          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
+          # 指定安卓aarch64的链接器（用NDK自带的clang）
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          
+          # 去掉重复的__ANDROID_API__定义，NDK会自动处理
           mkdir -p target/android
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
