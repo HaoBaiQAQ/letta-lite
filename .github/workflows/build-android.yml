@@ -1,5 +1,5 @@
 name: 终极方案：Rust安卓编译（必出按钮版）
-on: [workflow_dispatch]  # 手动触发按钮的核心，绝对不能删
+on: [workflow_dispatch]  # 手动触发按钮，保留不变
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -20,17 +20,25 @@ jobs:
           sudo apt-get update && sudo apt-get install -y \
             coreutils pkg-config make perl wget curl gcc cmake
 
-      - name: 官方安装NDK r25c（强制生效）
+      - name: 官方安装NDK r25c（强制锁定版本，避免自动升级到27）
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           api-level: ${{ env.ANDROID_API_LEVEL }}
-      - run: |
+
+      - name: 验证NDK路径并定义工具链变量（关键修复）
+        run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
-          # 动态定义工具链路径（避免提前引用变量）
-          echo "NDK_TOOLCHAIN_BIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
-          # 验证编译器存在
-          ls ${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang && echo "✅ 编译器存在"
+          # 同一步骤中用Shell变量直接引用，无需通过${{ env.xxx }}
+          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          # 用Shell变量验证编译器存在，避免路径错误
+          if [ -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "✅ 编译器存在：$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          else
+            echo "❌ 编译器不存在，检查NDK路径"
+            exit 1
+          fi
 
       - name: 下载OpenSSL 1.1.1w源码
         run: |
@@ -45,22 +53,23 @@ jobs:
           toolchain: 1.85.0
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（修正版本参数语法）
-        run: cargo install cargo-ndk --version=3.5.4 --locked  # 这里改了：--version=3.5.4
+      - name: 安装cargo-ndk（固定版本）
+        run: cargo install cargo-ndk --version=3.5.4 --locked
 
       - name: 清理编译缓存
         run: cargo clean
 
-      - name: 编译OpenSSL（绕开gcc检查）
+      - name: 编译OpenSSL（适配NDK r25c路径）
         run: |
           cd ${{ env.OPENSSL_SRC_DIR }}
-          # 用动态定义的工具链路径
+          # 引用上一步定义的环境变量（跨步骤可用）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export SYSROOT="$ANDROID_NDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/arch-aarch64"
+          # NDK r25c的sysroot路径修正（与NDK 27不同）
+          export SYSROOT="$ANDROID_NDK_ROOT/sysroot"
 
           ./Configure linux-aarch64 no-shared no-asm \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
@@ -75,7 +84,7 @@ jobs:
           make -j4 V=1
           make install_sw && echo "✅ OpenSSL编译完成"
 
-      - name: 编译Rust项目
+      - name: 编译Rust项目（输出.so文件）
         run: |
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
