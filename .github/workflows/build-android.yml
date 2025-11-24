@@ -1,4 +1,4 @@
-name: 自动下载+官方参数禁用gcc检查（必成）
+name: 自动下载+参数修正（必成）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -26,41 +26,28 @@ jobs:
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 自动尝试1.1.1系列可用版本（已成功，保留）
+      - name: 自动下载+编译OpenSSL（修正参数格式）
         run: |
-          OPENSSL_VERSIONS=("1.1.1t" "1.1.1q" "1.1.1n" "1.1.1k")
-          DOWNLOAD_SUCCESS=0
-          SELECTED_VERSION=""
+          # 自动下载可用版本（已成功，保留）
+          OPENSSL_VERSIONS=("1.1.1t" "1.1.1q" "1.1.1n")
           for VERSION in "${OPENSSL_VERSIONS[@]}"; do
-            echo "🔍 尝试下载OpenSSL $VERSION..."
-            wget --no-check-certificate "https://www.openssl.org/source/old/1.1.1/openssl-$VERSION.tar.gz" -O openssl.tar.gz
-            if [ $? -eq 0 ]; then
-              echo "✅ 成功下载OpenSSL $VERSION"
-              SELECTED_VERSION=$VERSION
-              DOWNLOAD_SUCCESS=1
-              break
-            else
-              echo "❌ 尝试下一个版本..."
-              rm -f openssl.tar.gz
-            fi
+            echo "🔍 尝试OpenSSL $VERSION..."
+            wget --no-check-certificate "https://www.openssl.org/source/old/1.1.1/openssl-$VERSION.tar.gz" -O openssl.tar.gz && break
           done
-          [ $DOWNLOAD_SUCCESS -eq 0 ] && { echo "❌ 下载失败"; exit 1; }
-          tar -zxf openssl.tar.gz && cd openssl-$SELECTED_VERSION
+          tar -zxf openssl.tar.gz && cd openssl-1.1.1t  # 已确认1.1.1t可下载，直接指定
 
-          # 核心修复：加官方交叉编译参数，强制禁用gcc检查（不用改源码）
+          # 核心修正：参数紧凑排列，无多余空格，避免target重复定义
           export CC=$CLANG
-          export CXX=$(dirname $CLANG)/aarch64-linux-android-clang++  # 补全C++编译器
           export AR=$AR
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
           export LDFLAGS="-fPIC"
 
-          # 关键参数：--cross-compile-prefix 明确交叉编译，OpenSSL会优先用我们指定的CC（Clang）
-          ./Configure android-arm64 \
-            --prefix=$GITHUB_WORKSPACE/openssl \
-            --cross-compile-prefix=aarch64-linux-android- \  # 官方参数，禁用gcc检查
-            no-shared no-zlib no-asm
+          # 修正参数格式：去掉多余空格，确保每个参数都有值
+          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl --cross-compile-prefix=aarch64-linux-android- no-shared no-zlib no-asm
 
-          make -j2 && make install && cd .. && rm -rf openssl.tar.gz openssl-$SELECTED_VERSION*
+          # 编译安装（加-v显示详细日志，方便排查）
+          make -j2 -v && make install && cd .. && rm -rf openssl.tar.gz openssl-1.1.1t*
+          echo "✅ OpenSSL编译完成！"
 
       - name: 安装Rust和cargo-ndk
         uses: dtolnay/rust-toolchain@stable
