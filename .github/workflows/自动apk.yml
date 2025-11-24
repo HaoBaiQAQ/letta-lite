@@ -1,5 +1,6 @@
 name: lettalite作者方案：Rust安卓编译（profile mobile版）+ 手动打包APK
 on: [workflow_dispatch]
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -11,10 +12,10 @@ jobs:
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       OUTPUT_DIR: ${{ github.workspace }}/target/android
-      CORE_DIR: "core"  # 子包目录（正确）
-      CORE_PACKAGE_NAME: "letta-core"  # 子包名（正确）
+      CORE_DIR: "core"
+      CORE_PACKAGE_NAME: "letta-core"
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      BUILD_TOOLS_VERSION: 28.0.3  # 兼容API 24的稳定版本
+      BUILD_TOOLS_VERSION: 28.0.3
 
     steps:
       - name: 拉取letta-lite源码
@@ -26,11 +27,14 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk
 
-      - name: 安装Android SDK和构建工具（含aapt/dx/apksigner）
+      - name: 安装Android SDK和构建工具
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }}"
+          packages: |
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+            platforms;android-${{ env.ANDROID_API_LEVEL }}
+            build-tools;${{ env.BUILD_TOOLS_VERSION }}
 
       - name: 查看SDK安装目录
         run: |
@@ -43,7 +47,6 @@ jobs:
 
       - name: 验证NDK和SDK工具（动态查找路径）
         run: |
-          # 验证NDK
           NDK_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
           if [ -z "$NDK_PATH" ]; then echo "❌ 未找到NDK"; exit 1; fi
           export ANDROID_NDK_ROOT=$NDK_PATH
@@ -51,14 +54,15 @@ jobs:
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then echo "❌ 编译器缺失"; exit 1; fi
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 编译器缺失"; exit 1
+          fi
 
-          # 动态查找build-tools工具
           AAPT_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name aapt -type f | head -1)
           DX_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name dx -type f | head -1)
           APKSIGNER_PATH=$(find ${{ env.ANDROID_SDK_ROOT }}/build-tools -name apksigner -type f | head -1)
           if [ -z "$AAPT_PATH" ] || [ -z "$DX_PATH" ] || [ -z "$APKSIGNER_PATH" ]; then
-            echo "❌ 缺少Android构建工具"; exit 1;
+            echo "❌ 缺少Android构建工具"; exit 1
           fi
           BUILD_TOOLS_BIN=$(dirname "$AAPT_PATH")
           echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
@@ -127,225 +131,243 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 唯一修复：安卓官方标准标签（无任何多余字符） --------------------------
-      - name: 本地创建极简UI和Java代码（无appcompat依赖）
+      # -------------------------- 修复：使用 |- 语法确保多行脚本不被缩进污染 --------------------------
+      - name: 创建极简Android项目结构（含正确AndroidManifest.xml）
         run: |
-          mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
-          # 1. UI布局文件（不变）
+          set -e
+          mkdir -p android-app/src/main/{java/com/letta/app,res/layout,jniLibs/arm64-v8a}
+
+          # 1. 布局文件
           cat > android-app/src/main/res/layout/activity_main.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:orientation="vertical"
-              android:padding="16dp">
-              <TextView
-                  android:id="@+id/resultView"
-                  android:layout_width="match_parent"
-                  android:layout_height="0dp"
-                  android:layout_weight="1"
-                  android:hint="等待Lettalite回复..."
-                  android:textSize="16sp"/>
-              <EditText
-                  android:id="@+id/inputEdit"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:hint="输入指令..."
-                  android:layout_marginBottom="8dp"/>
-              <Button
-                  android:id="@+id/sendBtn"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="发送"
-                  android:background="#2196F3"
-                  android:textColor="@android:color/white"/>
-              <LinearLayout
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:orientation="horizontal"
-                  android:layout_marginTop="8dp">
-                  <Button
-                      android:id="@+id/allowBtn"
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:text="允许工具调用"
-                      android:background="#4CAF50"
-                      android:textColor="@android:color/white"
-                      android:layout_marginRight="8dp"
-                      android:visibility="gone"/>
-                  <Button
-                      android:id="@+id/denyBtn"
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:text="拒绝工具调用"
-                      android:background="#F44336"
-                      android:textColor="@android:color/white"
-                      android:visibility="gone"/>
-              </LinearLayout>
-          </LinearLayout>
-          EOF
-          # 2. MainActivity.java（不变）
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/resultView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:hint="等待Lettalite回复..."
+        android:textSize="16sp" />
+
+    <EditText
+        android:id="@+id/inputEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="输入指令..."
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/sendBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="发送"
+        android:background="#2196F3"
+        android:textColor="@android:color/white" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/allowBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="允许工具调用"
+            android:background="#4CAF50"
+            android:textColor="@android:color/white"
+            android:layout_marginRight="8dp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/denyBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="拒绝工具调用"
+            android:background="#F44336"
+            android:textColor="@android:color/white"
+            android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>
+EOF
+
+          # 2. MainActivity.java
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
-          package com.letta.app;
+package com.letta.app;
 
-          import android.os.Bundle;
-          import android.view.View;
-          import android.widget.Button;
-          import android.widget.EditText;
-          import android.widget.TextView;
-          import android.app.Activity;
+import android.os.Bundle;
+import android.view.View;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.app.Activity;
 
-          public class MainActivity extends Activity {
-              static {
-                  System.loadLibrary("letta-core");
-              }
+public class MainActivity extends Activity {
+    static {
+        System.loadLibrary("letta-core");
+    }
 
-              private EditText inputEdit;
-              private TextView resultView;
-              private Button sendBtn, allowBtn, denyBtn;
-              private long ctx;
+    private EditText inputEdit;
+    private TextView resultView;
+    private Button sendBtn, allowBtn, denyBtn;
+    private long ctx;
 
-              public native long letta_init();
-              public native String letta_send_input(long ctx, String input);
-              public native String letta_confirm_tool(long ctx, boolean confirm);
+    public native long letta_init();
+    public native String letta_send_input(long ctx, String input);
+    public native String letta_confirm_tool(long ctx, boolean confirm);
 
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  setContentView(R.layout.activity_main);
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
 
-                  inputEdit = findViewById(R.id.inputEdit);
-                  resultView = findViewById(R.id.resultView);
-                  sendBtn = findViewById(R.id.sendBtn);
-                  allowBtn = findViewById(R.id.allowBtn);
-                  denyBtn = findViewById(R.id.denyBtn);
+        inputEdit = findViewById(R.id.inputEdit);
+        resultView = findViewById(R.id.resultView);
+        sendBtn = findViewById(R.id.sendBtn);
+        allowBtn = findViewById(R.id.allowBtn);
+        denyBtn = findViewById(R.id.denyBtn);
 
-                  ctx = letta_init();
+        ctx = letta_init();
 
-                  sendBtn.setOnClickListener(v -> {
-                      String input = inputEdit.getText().toString().trim();
-                      if (!input.isEmpty()) {
-                          inputEdit.setText("");
-                          String result = letta_send_input(ctx, input);
-                          resultView.setText(result);
-                          if (result.contains("是否允许") || result.contains("需要调用")) {
-                              allowBtn.setVisibility(View.VISIBLE);
-                              denyBtn.setVisibility(View.VISIBLE);
-                          } else {
-                              allowBtn.setVisibility(View.GONE);
-                              denyBtn.setVisibility(View.GONE);
-                          }
-                      }
-                  });
+        sendBtn.setOnClickListener(v -> {
+            String input = inputEdit.getText().toString().trim();
+            if (!input.isEmpty()) {
+                inputEdit.setText("");
+                String result = letta_send_input(ctx, input);
+                resultView.setText(result);
+                if (result.contains("是否允许") || result.contains("需要调用")) {
+                    allowBtn.setVisibility(View.VISIBLE);
+                    denyBtn.setVisibility(View.VISIBLE);
+                } else {
+                    allowBtn.setVisibility(View.GONE);
+                    denyBtn.setVisibility(View.GONE);
+                }
+            }
+        });
 
-                  allowBtn.setOnClickListener(v -> {
-                      resultView.setText(letta_confirm_tool(ctx, true));
-                      allowBtn.setVisibility(View.GONE);
-                      denyBtn.setVisibility(View.GONE);
-                  });
+        allowBtn.setOnClickListener(v -> {
+            resultView.setText(letta_confirm_tool(ctx, true));
+            allowBtn.setVisibility(View.GONE);
+            denyBtn.setVisibility(View.GONE);
+        });
 
-                  denyBtn.setOnClickListener(v -> {
-                      resultView.setText(letta_confirm_tool(ctx, false));
-                      allowBtn.setVisibility(View.GONE);
-                      denyBtn.setVisibility(View.GONE);
-                  });
-              }
-          }
-          EOF
-          # 3. AndroidManifest.xml（安卓官方100%正确！没有任何多余<或>）
+        denyBtn.setOnClickListener(v -> {
+            resultView.setText(letta_confirm_tool(ctx, false));
+            allowBtn.setVisibility(View.GONE);
+            denyBtn.setVisibility(View.GONE);
+        });
+    }
+}
+EOF
+
+          # 3. AndroidManifest.xml —— 顶格写 EOF，确保无缩进
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.letta.app"
-              android:versionCode="1"
-              android:versionName="1.0">
-              <uses-sdk
-                  android:minSdkVersion="24"
-                  android:targetSdkVersion="33"/>
-              <application
-                  android:allowBackup="true"
-                  android:icon="@android:mipmap/sym_def_app_icon"  <!-- 系统默认图标，无需额外文件 -->
-                  android:label="Lettalite"
-                  android:theme="@android:style/Theme.Light">
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.letta.app"
+    android:versionCode="1"
+    android:versionName="1.0">
 
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <!-- 安卓官方标准标签！没有多余字符！ -->
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-          echo "✅ UI和Java代码创建完成（标签完全正确）"
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="33" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@android:mipmap/sym_def_app_icon"
+        android:label="Lettalite"
+        android:theme="@android:style/Theme.Light">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+
+          # 验证文件是否完整
+          if [ ! -s android-app/src/main/AndroidManifest.xml ]; then
+            echo "❌ AndroidManifest.xml 写入失败或为空"
+            exit 1
+          fi
+          xmllint --noout android-app/src/main/AndroidManifest.xml || (echo "❌ XML 格式错误" && exit 1)
+          echo "✅ UI和Java代码创建完成，XML格式正确"
 
       - name: 整合.so文件到APK目录
         run: |
-          mkdir -p android-app/src/main/jniLibs/arm64-v8a/
           cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心整合完成"
 
-      - name: 手动编译打包APK（步骤顺序正确）
+      - name: 手动编译打包APK
         working-directory: ./android-app
         run: |
+          set -e
           BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
           ANDROID_SDK_ROOT="${{ env.ANDROID_SDK_ROOT }}"
           OUTPUT_APK="app-debug.apk"
           TEMP_DIR="temp_build"
           mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs,gen}
 
-          # 1. 生成R.java（资源索引类）
+          # 1. 打包资源
           $BUILD_TOOLS_BIN/aapt package -f -m -J $TEMP_DIR/gen -M src/main/AndroidManifest.xml \
             -S src/main/res -I "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
             -F $TEMP_DIR/resources.ap_
-          echo "✅ 资源打包完成，已生成R.java"
+          echo "✅ 资源打包完成"
 
-          # 2. 复制R.java到源码目录
+          # 2. 复制R.java
           mkdir -p src/main/java/com/letta/app
           cp $TEMP_DIR/gen/com/letta/app/R.java src/main/java/com/letta/app/
-          echo "✅ R.java已复制到源码目录"
+          echo "✅ R.java已复制"
 
-          # 3. 编译Java代码
+          # 3. 编译Java
           javac -source 1.8 -target 1.8 \
             -bootclasspath "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
             -d $TEMP_DIR/classes \
             src/main/java/com/letta/app/*.java
-          echo "✅ Java代码编译完成"
+          echo "✅ Java编译完成"
 
-          # 4. 生成dex文件
+          # 4. 生成dex
           $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
-          echo "✅ Dex文件生成完成"
+          echo "✅ Dex生成完成"
 
-          # 5. 复制.so文件
+          # 5. 复制so
           cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
-          echo "✅ .so文件复制完成"
+          echo "✅ so复制完成"
 
           # 6. 打包未签名APK
           cd $TEMP_DIR
           zip -r ../unsigned.apk dex resources.ap_ jniLibs
           cd ..
-          echo "✅ 未签名APK生成完成"
+          echo "✅ 未签名APK生成"
 
-          # 7. 生成调试证书
+          # 7. 生成调试密钥
           keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
             -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
-          echo "✅ 调试证书生成完成"
+          echo "✅ 调试密钥生成"
 
-          # 8. 签名APK
+          # 8. 签名
           $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
             --out $OUTPUT_APK unsigned.apk
           echo "✅ APK签名完成"
 
-          # 9. 对齐APK
+          # 9. 对齐
           $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
           mv $OUTPUT_APK.aligned $OUTPUT_APK
-          echo "✅ APK对齐完成，最终产物：$OUTPUT_APK"
+          echo "✅ APK对齐完成"
           ls -l $OUTPUT_APK
 
-      - name: 上传最终APK（可直接安装）
+      - name: 上传最终APK
         uses: actions/upload-artifact@v4
         with:
           name: lettalite-全功能安卓APK（直接安装）
