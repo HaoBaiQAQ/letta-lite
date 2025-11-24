@@ -1,4 +1,4 @@
-name: 最终方案：Rust自动编译（补充依赖，必成）
+name: 最终最终最终方案（语法修正，必成）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,14 +7,8 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需依赖（解决缺失问题）
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
-            coreutils  # 含head、ls等基础命令
-            pkg-config  # 交叉编译必需
-            libssl-dev  # 提供编译依赖（不用于运行，仅编译）
-            make perl wget curl  # OpenSSL自动编译必需
-            gcc  # 基础编译工具（不用于安卓，仅环境依赖）
+      - name: 安装所有必需依赖（一行写法，无语法错误）
+        run: sudo apt-get update && sudo apt-get install -y coreutils pkg-config libssl-dev make perl wget curl gcc
 
       - name: 安装NDK r25c（自动加入PATH）
         uses: nttld/setup-ndk@v1
@@ -31,14 +25,11 @@ jobs:
 
       - name: 编译项目（Rust自动处理OpenSSL）
         run: |
-          # 核心：保持自动模式，不手动干预OpenSSL
-          export OPENSSL_VENDORED=1  # 自动下载+交叉编译OpenSSL
+          export OPENSSL_VENDORED=1
           export OPENSSL_NO_VENDOR=0
-          export PKG_CONFIG_ALLOW_CROSS=1  # 允许交叉编译
+          export PKG_CONFIG_ALLOW_CROSS=1
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
-
-          # 开始编译，所有依赖自动处理
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
