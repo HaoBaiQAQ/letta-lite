@@ -4,7 +4,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: 27.3.13750724  # 适配实际使用的NDK版本
+      ANDROID_NDK_VERSION: 27.3.13750724
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
@@ -21,27 +21,24 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      - name: 安装NDK 27.3.13750724（匹配实际使用版本）
+      - name: 安装NDK 27.3.13750724
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           api-level: ${{ env.ANDROID_API_LEVEL }}
 
-      - name: 验证NDK并配置工具链（适配NDK 27路径）
+      - name: 验证NDK并配置工具链
         run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
-          # NDK 27的工具链和sysroot路径（关键修正）
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          # 验证编译器和头文件
           COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           if [ -f "$COMPILER_PATH" ] && [ -d "$NDK_SYSROOT/usr/include" ]; then
             echo "✅ 编译器和头文件路径正确"
           else
-            echo "❌ 路径错误，当前工具链路径：$NDK_TOOLCHAIN_BIN"
-            ls $NDK_SYSROOT/usr/include | grep stdio.h  # 验证头文件是否存在
+            echo "❌ 路径错误"
             exit 1
           fi
 
@@ -52,7 +49,7 @@ jobs:
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
 
-      - name: 配置Rust环境
+      - name: 配置Rust环境（确保目标架构已添加）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
@@ -64,7 +61,7 @@ jobs:
       - name: 清理缓存
         run: cargo clean
 
-      - name: 编译OpenSSL（彻底修复参数和路径）
+      - name: 编译OpenSSL
         run: |
           cd ${{ env.OPENSSL_SRC_DIR }}
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
@@ -74,7 +71,6 @@ jobs:
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
 
-          # 关键修复：1. 正确的sysroot路径 2. 移除-pie 3. 移除重复的__ANDROID_API__定义
           ./Configure linux-aarch64 \
             no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
@@ -85,7 +81,7 @@ jobs:
           make -j$(nproc) V=1
           make install_sw && echo "✅ OpenSSL编译完成"
 
-      - name: 编译letta-lite
+      - name: 编译letta-lite（核心修复：移除无效特性参数）
         run: |
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
@@ -93,7 +89,8 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
 
           mkdir -p target/android
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile --no-default-features --features "android"
+          # 关键修复：删掉--no-default-features和--features "android"（项目无此特性）
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
