@@ -1,4 +1,4 @@
-name: 终极方案：Rust安卓编译（profile mobile版）
+name: lettalite作者方案：Rust安卓编译（profile mobile版）
 on: [workflow_dispatch]
 jobs:
   build-android:
