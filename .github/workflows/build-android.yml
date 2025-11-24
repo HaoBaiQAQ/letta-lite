@@ -1,104 +1,106 @@
 name: 终极方案：Rust安卓编译（必出按钮版）
-on: [workflow_dispatch]  # 手动触发按钮，保留不变
+on: [workflow_dispatch]
 jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: r25c
-      ANDROID_API_LEVEL: 24
+      ANDROID_NDK_VERSION: r25c  # 兼容OpenSSL 1.1.1w及Qt文档推荐版本
+      ANDROID_API_LEVEL: 24      # 匹配Qt文档最低支持API级别
       TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      # 遵循OpenSSL官方Android指南：指定NDK工具链前缀
+      TOOLCHAIN_PREFIX: aarch64-linux-android
 
     steps:
-      - name: 拉取Rust项目源码
+      - name: 拉取letta-lite源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖
+      - name: 安装基础依赖（含Qt文档要求的编译工具）
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            coreutils pkg-config make perl wget curl gcc cmake
+            coreutils pkg-config make perl wget curl gcc cmake \
+            libssl-dev zlib1g-dev  # 补充基础依赖，避免编译缺失
 
-      - name: 官方安装NDK r25c（强制锁定版本，避免自动升级到27）
+      - name: 安装NDK r25c（严格遵循官方指定版本）
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           api-level: ${{ env.ANDROID_API_LEVEL }}
 
-      - name: 验证NDK路径并定义工具链变量（关键修复）
+      - name: 验证NDK并配置工具链（参考OpenSSL官方指南）
         run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
-          # 同一步骤中用Shell变量直接引用，无需通过${{ env.xxx }}
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          # 用Shell变量验证编译器存在，避免路径错误
-          if [ -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "✅ 编译器存在：$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          # 验证编译器（OpenSSL官方要求的命名格式）
+          COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TOOLCHAIN_PREFIX }}${{ env.ANDROID_API_LEVEL }}-clang"
+          if [ -f "$COMPILER_PATH" ]; then
+            echo "✅ 编译器存在：$COMPILER_PATH"
           else
-            echo "❌ 编译器不存在，检查NDK路径"
+            echo "❌ 编译器缺失，检查NDK安装"
             exit 1
           fi
 
-      - name: 下载OpenSSL 1.1.1w源码
+      - name: 下载OpenSSL源码（官方镜像，避免超时）
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
-          wget -q -O openssl-${{ env.OPENSSL_VERSION }}.tar.gz https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
+          # 改用OpenSSL官方下载链接（参考https://wiki.openssl.org/index.php/Android）
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
 
-      - name: 配置Rust环境
+      - name: 配置Rust环境（适配letta-lite依赖）
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: 1.85.0  # 兼容letta-lite的Rust版本要求
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（固定版本）
+      - name: 安装cargo-ndk（固定兼容版本）
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 清理编译缓存
+      - name: 清理缓存（避免旧编译产物干扰）
         run: cargo clean
 
-      - name: 编译OpenSSL（适配NDK r25c路径）
+      - name: 编译OpenSSL（融合三大文档规范）
         run: |
           cd ${{ env.OPENSSL_SRC_DIR }}
-          # 引用上一步定义的环境变量（跨步骤可用）
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_PREFIX }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_PREFIX }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          # NDK r25c的sysroot路径修正（与NDK 27不同）
-          export SYSROOT="$ANDROID_NDK_ROOT/sysroot"
+          export SYSROOT="$ANDROID_NDK_ROOT/sysroot"  # Qt文档推荐的sysroot路径
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
 
-          ./Configure linux-aarch64 no-shared no-asm \
+          # OpenSSL官方Configure参数（适配Android aarch64）
+          ./Configure linux-aarch64 \
+            no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=$SYSROOT \
+            --cross-compile-prefix=${{ env.TOOLCHAIN_PREFIX }}- \
             -D__ANDROID_API__=${{ env.ANDROID_API_LEVEL }} \
-            -DOPENSSL_NO_VERSIONING \
-            -fPIC \
-            -pie \
-            -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+            -fPIC -pie -march=armv8-a
 
-          make -j4 V=1
+          make -j$(nproc) V=1  # 自适应CPU核心数，加速编译
           make install_sw && echo "✅ OpenSSL编译完成"
 
-      - name: 编译Rust项目（输出.so文件）
+      - name: 编译letta-lite（指定输出路径）
         run: |
+          # 配置OpenSSL依赖路径，让Rust正确找到头文件和库
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export PKG_CONFIG_PATH=""
-          export C_INCLUDE_PATH=""
-          export LIBRARY_PATH=""
+          export PKG_CONFIG_ALLOW_CROSS=1  # 允许跨编译时使用pkg-config
 
           mkdir -p target/android
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile && echo "✅ Rust编译完成"
+          # 针对letta-lite优化编译参数，避免冗余依赖
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile --no-default-features --features "android"
 
-      - name: 上传产物
+      - name: 上传编译产物（.so文件）
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-final
+          name: letta-lite-android-so
           path: target/android/*.so
           retention-days: 14
