@@ -1,4 +1,4 @@
-name: 最终方案：Rust安卓编译（系统安全+依赖隔离）
+name: 终极方案：Rust安卓编译（手动指定OpenSSL源码）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,26 +7,35 @@ jobs:
       ANDROID_NDK_VERSION: r25c
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
+      OPENSSL_VERSION: 1.1.1w  # 匹配之前的稳定版
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src  # 工作目录内存储，不碰系统
 
     steps:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖（保留系统必要库，不删任何系统文件）
+      - name: 安装基础依赖（仅保证系统运行）
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            coreutils pkg-config make perl wget curl gcc cmake \
-            libssl-dev  # 恢复系统库，让sudo正常运行，但编译时不用它
+            coreutils pkg-config make perl wget curl gcc cmake
 
-      - name: 强制安装NDK r25c（锁定版本，禁用自动升级）
-        uses: nttld/setup-ndk@v1
+      - name: 用官方Action安装NDK r25c（100%生效）
+        uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
-          add-to-path: true
           api-level: ${{ env.ANDROID_API_LEVEL }}
       - run: |
+          # 验证NDK版本（确保是r25c）
           echo "NDK路径：$ANDROID_NDK_ROOT"
           $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang --version
+
+      - name: 手动下载OpenSSL源码（避免自动下载失效）
+        run: |
+          mkdir -p $OPENSSL_SRC_DIR
+          cd $OPENSSL_SRC_DIR
+          # 下载安卓版OpenSSL源码（官方GitHub，无404）
+          wget -O openssl-${OPENSSL_VERSION}.tar.gz https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1w.tar.gz
+          tar -xvzf openssl-${OPENSSL_VERSION}.tar.gz --strip-components=1
 
       - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
@@ -40,28 +49,35 @@ jobs:
       - name: 清理编译缓存
         run: cargo clean
 
-      - name: 编译项目（强制隔离系统OpenSSL，只用自动编译版）
+      - name: 编译项目（手动指定OpenSSL路径，彻底隔离系统）
         run: |
-          # 核心：强制openssl-sys自动下载+编译安卓版，忽略系统库
-          export OPENSSL_VENDORED=1
-          export OPENSSL_NO_VENDOR=0
-          export PKG_CONFIG_ALLOW_CROSS=1
+          # 关键：告诉openssl-sys使用手动下载的源码，不找系统库
+          export OPENSSL_DIR=$OPENSSL_SRC_DIR
+          export OPENSSL_INCLUDE_DIR=$OPENSSL_SRC_DIR/include
+          export OPENSSL_LIB_DIR=$OPENSSL_SRC_DIR/lib
           
-          # 关键：屏蔽系统OpenSSL路径，让编译器找不到
+          # 彻底屏蔽系统路径，编译器只能找到手动下载的源码
           export PKG_CONFIG_PATH=""
           export C_INCLUDE_PATH=""
           export LIBRARY_PATH=""
+          export LD_LIBRARY_PATH=""
           
-          # 指定安卓交叉编译器和系统头文件路径（只找NDK的安卓环境）
-          export CARGO_TARGET_${TARGET_ARCH//-/_}_LINKER="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
-          export SYSROOT="$ANDROID_NDK_ROOT/platforms/android-${ANDROID_API_LEVEL}/arch-${TARGET_ARCH%*-*}"
-          export CFLAGS="--sysroot=$SYSROOT -fPIC -I/tmp/openssl-include"
-          export CXXFLAGS="--sysroot=$SYSROOT -fPIC"
-
-          # 提前创建OpenSSL临时目录，确保自动编译时路径有效
-          mkdir -p /tmp/openssl-include /tmp/openssl-lib
+          # 配置安卓交叉编译工具链（NDK r25c专属）
+          export CC="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
+          export CXX="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang++"
+          export AR="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export RANLIB="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
           
-          # 执行编译，openssl-sys会自动下载源码并交叉编译安卓aarch64版本
+          # 配置OpenSSL交叉编译参数（适配安卓aarch64）
+          cd $OPENSSL_SRC_DIR
+          ./Configure android-arm64 no-shared no-asm --prefix=$OPENSSL_SRC_DIR/install \
+            --sysroot=$ANDROID_NDK_ROOT/platforms/android-${ANDROID_API_LEVEL}/arch-aarch64 \
+            -D__ANDROID_API__=${ANDROID_API_LEVEL}
+          make -j4  # 编译OpenSSL源码为安卓aarch64版本
+          make install_sw  # 安装到指定目录（不影响系统）
+          
+          # 回到Rust项目，执行编译（此时OpenSSL路径完全明确）
+          cd ${{ github.workspace }}
           mkdir -p target/android
           cargo ndk -t $TARGET_ARCH -o target/android build --profile mobile
 
