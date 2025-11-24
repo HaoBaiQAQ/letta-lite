@@ -4,7 +4,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: r25c  # 强制锁定稳定版本
+      ANDROID_NDK_VERSION: 27.3.13750724  # 适配实际使用的NDK版本
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
@@ -21,24 +21,27 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      - name: 强制安装NDK r25c（禁止自动升级到27）
+      - name: 安装NDK 27.3.13750724（匹配实际使用版本）
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           api-level: ${{ env.ANDROID_API_LEVEL }}
-          ndk-direct-download: true  # 关键：直接下载指定版本，避免复用系统已安装的NDK 27
 
-      - name: 验证NDK并配置工具链
+      - name: 验证NDK并配置工具链（适配NDK 27路径）
         run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
+          # NDK 27的工具链和sysroot路径（关键修正）
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          # 验证编译器和头文件
           COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          if [ -f "$COMPILER_PATH" ]; then
-            echo "✅ 编译器存在：$COMPILER_PATH"
+          if [ -f "$COMPILER_PATH" ] && [ -d "$NDK_SYSROOT/usr/include" ]; then
+            echo "✅ 编译器和头文件路径正确"
           else
-            echo "❌ 编译器缺失，当前路径：$NDK_TOOLCHAIN_BIN"
-            ls $NDK_TOOLCHAIN_BIN | grep clang  # 列出所有clang编译器，便于排查
+            echo "❌ 路径错误，当前工具链路径：$NDK_TOOLCHAIN_BIN"
+            ls $NDK_SYSROOT/usr/include | grep stdio.h  # 验证头文件是否存在
             exit 1
           fi
 
@@ -61,7 +64,7 @@ jobs:
       - name: 清理缓存
         run: cargo clean
 
-      - name: 编译OpenSSL（移除冲突前缀，修复核心错误）
+      - name: 编译OpenSSL（彻底修复参数和路径）
         run: |
           cd ${{ env.OPENSSL_SRC_DIR }}
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
@@ -69,17 +72,15 @@ jobs:
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export SYSROOT="$ANDROID_NDK_ROOT/sysroot"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
 
-          # 关键修复：移除 --cross-compile-prefix 参数（NDK clang无需额外前缀）
+          # 关键修复：1. 正确的sysroot路径 2. 移除-pie 3. 移除重复的__ANDROID_API__定义
           ./Configure linux-aarch64 \
             no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=$SYSROOT \
-            -D__ANDROID_API__=${{ env.ANDROID_API_LEVEL }} \
-            -fPIC -pie -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD  # 显式指定工具链，避免自动拼接错误
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
 
           make -j$(nproc) V=1
           make install_sw && echo "✅ OpenSSL编译完成"
