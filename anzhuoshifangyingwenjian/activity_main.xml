@@ -1,1 +1,59 @@
 
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/resultView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:hint="等待Lettalite回复..."
+        android:textSize="16sp" />
+
+    <EditText
+        android:id="@+id/inputEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="输入指令..."
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/sendBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="发送"
+        android:background="#2196F3"
+        android:textColor="@android:color/white" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/allowBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="允许工具调用"
+            android:background="#4CAF50"
+            android:textColor="@android:color/white"
+            android:layout_marginRight="8dp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/denyBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="拒绝工具调用"
+            android:background="#F44336"
+            android:textColor="@android:color/white"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</LinearLayout>
