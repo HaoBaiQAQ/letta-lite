@@ -139,7 +139,7 @@ jobs:
 
       - name: 本地创建极简UI文件（不依赖外部仓库，稳定无报错）
         run: |
-          # 创建安卓项目目录结构
+          # 创建安卓项目目录结构（修正：按标准安卓项目结构创建，避免路径错误）
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
           # 1. 创建UI布局文件（输入框+发送按钮+结果展示区+工具确认按钮）
           cat > android-app/src/main/res/layout/activity_main.xml << EOF
@@ -287,73 +287,66 @@ jobs:
               }
           }
           EOF
-          # 3. 创建安卓构建配置文件（build.gradle）—— 修复插件找不到的问题
+          # 3. 创建安卓构建配置文件（build.gradle）—— 核心修复：适配老Gradle版本
           cat > android-app/build.gradle << EOF
-          // 新增：指定插件仓库（告诉Gradle去哪下载安卓插件）
+          // 修复1：指定兼容老Gradle的插件仓库和版本（3.6.4是稳定兼容版）
           buildscript {
               repositories {
-                  google()  // 谷歌官方仓库（安卓插件的主仓库）
-                  mavenCentral()  // 中央仓库（备用）
+                  // 老Gradle不支持google()，改用具体URL
+                  maven { url 'https://maven.google.com' }
+                  mavenCentral()
               }
               dependencies {
-                  // 新增：指定安卓插件版本（用稳定版7.4.2，适配编译环境）
-                  classpath 'com.android.tools.build:gradle:7.4.2'
+                  // 修复2：用3.6.4版本（兼容Gradle 4.4.1）
+                  classpath 'com.android.tools.build:gradle:3.6.4'
               }
           }
-          plugins {
-              id 'com.android.application'
-          }
+          // 修复3：老Gradle用apply plugin声明，不用plugins块
+          apply plugin: 'com.android.application'
           android {
-              compileSdk 33
-              namespace "com.letta.app"
+              compileSdkVersion 33
               defaultConfig {
                   applicationId "com.letta.app"
-                  minSdk 24  // 适配安卓7.0及以上手机
-                  targetSdk 33
+                  minSdkVersion 24
+                  targetSdkVersion 33
                   versionCode 1
                   versionName "1.0"
-                  // 只适配arm64-v8a架构（手机主流架构）
                   ndk {
                       abiFilters "arm64-v8a"
                   }
                   testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
               }
-              // 构建类型：Debug版（可直接安装，无需签名）
               buildTypes {
                   debug {
                       minifyEnabled false
                       shrinkResources false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
-              // 配置源码和资源目录
               sourceSets {
                   main {
                       java.srcDirs = ['src/main/java']
                       res.srcDirs = ['src/main/res']
-                      jniLibs.srcDirs = ['src/main/jniLibs']  // .so文件存放目录
+                      jniLibs.srcDirs = ['src/main/jniLibs']
                   }
               }
-              // 配置Java编译版本
               compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
+                  sourceCompatibility = '1.8'
+                  targetCompatibility = '1.8'
               }
           }
-          // 依赖安卓基础库（AppCompat）
           dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.appcompat:appcompat:1.2.0'  // 适配低版本插件
+              implementation 'com.google.android.material:material:1.3.0'
               testImplementation 'junit:junit:4.13.2'
-              androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-              androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+              androidTestImplementation 'androidx.test.ext:junit:1.1.2'
+              androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
           }
           EOF
-          # 4. 创建settings.gradle（安卓项目配置）
+          # 4. 创建settings.gradle（修复：标准项目结构配置）
           cat > android-app/settings.gradle << EOF
           rootProject.name = "LettaliteApp"
+          // 标准配置：app模块就是当前android-app目录
           include ':app'
-          project(':app').projectDir = new File('android-app')
           EOF
           echo "✅ 本地创建UI文件完成，无外部依赖，稳定可靠"
 
