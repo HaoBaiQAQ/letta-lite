@@ -7,14 +7,14 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需依赖（修复续行符，解决包找不到问题）
+      - name: 安装所有必需依赖（修复空包名问题）
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            coreutils \  # 含head、ls等基础命令
-            pkg-config \  # 交叉编译必需
-            libssl-dev \  # 提供编译依赖
-            make perl wget curl \  # OpenSSL编译必需
-            gcc  # 基础编译工具
+            coreutils \
+            pkg-config \
+            libssl-dev \
+            make perl wget curl \
+            gcc
 
       - name: 安装NDK r25c（自动加入PATH）
         uses: nttld/setup-ndk@v1
