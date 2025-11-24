@@ -1,4 +1,4 @@
-name: 唯一方案：Rust原生自动编译OpenSSL（零报错）
+name: 最终方案：Rust自动编译（补充依赖，必成）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,10 +7,16 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖（含head命令，解决缺失问题）
-        run: sudo apt-get update && sudo apt-get install -y coreutils make perl wget curl
+      - name: 安装所有必需依赖（解决缺失问题）
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            coreutils  # 含head、ls等基础命令
+            pkg-config  # 交叉编译必需
+            libssl-dev  # 提供编译依赖（不用于运行，仅编译）
+            make perl wget curl  # OpenSSL自动编译必需
+            gcc  # 基础编译工具（不用于安卓，仅环境依赖）
 
-      - name: 安装NDK r25c（仅需提供编译器，自动识别）
+      - name: 安装NDK r25c（自动加入PATH）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
@@ -23,17 +29,13 @@ jobs:
           target: aarch64-linux-android
       - run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目（自动处理所有依赖，包括OpenSSL）
+      - name: 编译项目（Rust自动处理OpenSSL）
         run: |
-          # 核心1：启用vendored模式，openssl-sys自动下载+交叉编译OpenSSL
-          export OPENSSL_VENDORED=1
-          # 核心2：禁用系统OpenSSL查找，避免冲突
+          # 核心：保持自动模式，不手动干预OpenSSL
+          export OPENSSL_VENDORED=1  # 自动下载+交叉编译OpenSSL
           export OPENSSL_NO_VENDOR=0
-          # 核心3：允许交叉编译，解决pkg-config报错
-          export PKG_CONFIG_ALLOW_CROSS=1
-          # 核心4：指定NDK的Clang链接器（CI环境已加入PATH，直接用）
+          export PKG_CONFIG_ALLOW_CROSS=1  # 允许交叉编译
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
-          # 核心5：指定安卓API版本，适配目标设备
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
 
           # 开始编译，所有依赖自动处理
