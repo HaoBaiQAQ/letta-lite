@@ -271,10 +271,10 @@ jobs:
                       android:name=".MainActivity"
                       android:exported="true">
                       <!-- 安卓官方标准标签！没有多余字符！ -->
-                      <<intent-filter>
+                      <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
-                      </</intent-filter>
+                      </intent-filter>
                   </activity>
               </application>
           </manifest>
