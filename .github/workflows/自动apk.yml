@@ -26,14 +26,13 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk
 
+      # 核心修复：修正packages格式，用空格分隔，避免YAML解析错误
       - name: 安装Android SDK和构建工具（含aapt/dx/apksigner）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: |
-            ndk;${{ env.ANDROID_NDK_VERSION }}
-            platforms;android-${{ env.ANDROID_API_LEVEL }}
-            build-tools;${{ env.BUILD_TOOLS_VERSION }}
+          # 关键：用空格分隔多个包，sdkmanager能正确识别
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }} build-tools;${{ env.BUILD_TOOLS_VERSION }}"
 
       - name: 验证NDK和SDK工具
         run: |
