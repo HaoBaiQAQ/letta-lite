@@ -7,7 +7,9 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: 27.3.13750724
+      # 修正为官方存在的NDK稳定版本（r27）
+      ANDROID_NDK_VERSION: 27.0.11718014
+      # 保持Android 7.0+（API 24）不变
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
@@ -17,24 +19,24 @@ jobs:
       CORE_DIR: "core"
       CORE_PACKAGE_NAME: "letta-core"
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      BUILD_TOOLS_VERSION: 28.0.3
-      # 你的文件存放目录（统一路径）
+      # 改用稳定的构建工具版本（兼容API 24）
+      BUILD_TOOLS_VERSION: 30.0.3
+      # 你的文件存放目录
       ASSETS_DIR: ${{ github.workspace }}/anzhuoshifangyingwenjian
-      # 三个单独文件的路径
       LAYOUT_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/activity_main.xml
       JAVA_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/MainActivity.java
       MANIFEST_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/AndroidManifest.xml
 
     steps:
-      - name: 拉取letta-lite源码（含所有单独文件）
+      - name: 拉取letta-lite源码
         uses: actions/checkout@v4
 
-      - name: 验证所有单独文件是否存在
+      - name: 验证所有文件存在
         run: |
-          if [ ! -f "$LAYOUT_FILE" ]; then echo "❌ 未找到布局文件：$LAYOUT_FILE"; exit 1; fi
-          if [ ! -f "$JAVA_FILE" ]; then echo "❌ 未找到Java文件：$JAVA_FILE"; exit 1; fi
-          if [ ! -f "$MANIFEST_FILE" ]; then echo "❌ 未找到Manifest文件：$MANIFEST_FILE"; exit 1; fi
-          echo "✅ 所有文件验证通过"
+          if [ ! -f "$LAYOUT_FILE" ]; then echo "❌ 未找到布局文件"; exit 1; fi
+          if [ ! -f "$JAVA_FILE" ]; then echo "❌ 未找到Java文件"; exit 1; fi
+          if [ ! -f "$MANIFEST_FILE" ]; then echo "❌ 未找到Manifest文件"; exit 1; fi
+          echo "✅ 文件验证通过"
 
       - name: 安装基础依赖
         run: |
@@ -43,10 +45,12 @@ jobs:
             libssl-dev zlib1g-dev zip unzip openjdk-17-jdk \
             libxml2-utils
 
-      - name: 安装Android SDK和构建工具
-        uses: android-actions/setup-android@v3
+      - name: 安装Android SDK/NDK（升级插件到v4，修复数据源问题）
+        uses: android-actions/setup-android@v4  # 关键：升级到最新版插件
         with:
           accept-android-sdk-licenses: true
+          # 明确指定SDK命令行工具版本（避免数据源问题）
+          sdk-tools-version: 11076708
           packages: |
             ndk;${{ env.ANDROID_NDK_VERSION }}
             platforms;android-${{ env.ANDROID_API_LEVEL }}
@@ -54,17 +58,20 @@ jobs:
 
       - name: 验证NDK和SDK工具
         run: |
-          NDK_PATH=$(find $ANDROID_SDK_ROOT/ndk -maxdepth 1 -type d | grep $ANDROID_NDK_VERSION)
-          if [ -z "$NDK_PATH" ]; then echo "❌ 未找到NDK"; exit 1; fi
+          # 动态查找NDK路径（避免版本号拼写错误）
+          NDK_PATH=$(find $ANDROID_SDK_ROOT/ndk -maxdepth 1 -type d | head -1)
+          if [ -z "$NDK_PATH" ]; then echo "❌ NDK安装失败"; exit 1; fi
           export ANDROID_NDK_ROOT=$NDK_PATH
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           
+          # 验证NDK编译器存在
           if [ ! -f "$NDK_TOOLCHAIN_BIN/$TARGET_ARCH$ANDROID_API_LEVEL-clang" ]; then
             echo "❌ NDK编译器缺失"; exit 1; fi
 
+          # 动态查找构建工具（避免路径错误）
           AAPT_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name aapt -type f | head -1)
           DX_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name dx -type f | head -1)
           APKSIGNER_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name apksigner -type f | head -1)
@@ -72,8 +79,9 @@ jobs:
             echo "❌ 构建工具缺失"; exit 1; fi
           BUILD_TOOLS_BIN=$(dirname "$AAPT_PATH")
           echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
+          echo "✅ NDK和SDK工具验证通过"
 
-      - name: 编译OpenSSL
+      - name: 下载并编译OpenSSL
         run: |
           mkdir -p $OPENSSL_SRC_DIR $OPENSSL_INSTALL_DIR
           cd $OPENSSL_SRC_DIR
@@ -88,6 +96,7 @@ jobs:
             --sysroot=$NDK_SYSROOT \
             -fPIC -march=armv8-a
           make -j$(nproc) && make install_sw
+          echo "✅ OpenSSL编译完成"
 
       - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
@@ -106,6 +115,7 @@ jobs:
           if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
             echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
           fi
+          echo "✅ Rust工作区配置完成"
 
       - name: 编译Rust核心库
         run: |
@@ -118,22 +128,19 @@ jobs:
             --package $CORE_PACKAGE_NAME \
             --profile mobile
           find target -name "lib*.so" -exec cp {} $OUTPUT_DIR/ \;
+          echo "✅ Rust核心.so库编译完成"
+          ls -l $OUTPUT_DIR
 
-      - name: 创建临时Android项目（复制单独文件）
+      - name: 创建临时Android项目并复制文件
         run: |
-          # 创建标准Android目录结构
           mkdir -p temp-android/src/main/{java/com/letta/app,res/layout,jniLibs/arm64-v8a}
-          # 复制布局文件
           cp $LAYOUT_FILE temp-android/src/main/res/layout/
-          # 复制Java文件
           cp $JAVA_FILE temp-android/src/main/java/com/letta/app/
-          # 复制Manifest文件
           cp $MANIFEST_FILE temp-android/src/main/
-          # 复制.so库
           cp $OUTPUT_DIR/lib*.so temp-android/src/main/jniLibs/arm64-v8a/
-          echo "✅ 所有文件已复制到临时项目"
+          echo "✅ 所有文件复制完成"
 
-      - name: 编译打包APK（无任何嵌入内容）
+      - name: 编译打包APK
         working-directory: ./temp-android
         run: |
           set -e
@@ -160,21 +167,19 @@ jobs:
           # 4. 生成Dex文件
           $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
 
-          # 5. 复制.so库到打包目录
+          # 5. 复制.so库
           cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
 
           # 6. 打包未签名APK
           cd $TEMP_DIR && zip -r ../unsigned.apk dex resources.ap_ jniLibs && cd ..
 
-          # 7. 生成调试密钥
+          # 7. 生成调试密钥并签名
           keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
             -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
-
-          # 8. 签名APK
           $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
             --out $OUTPUT_APK unsigned.apk
 
-          # 9. 对齐APK
+          # 8. 对齐APK
           $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
           mv $OUTPUT_APK.aligned $OUTPUT_APK
           echo "🎉 APK编译完成！"
@@ -183,6 +188,6 @@ jobs:
       - name: 上传最终APK
         uses: actions/upload-artifact@v4
         with:
-          name: lettalite-安卓APK（直接安装）
+          name: lettalite-安卓APK（Android7.0+）
           path: temp-android/app-debug.apk
           retention-days: 30
