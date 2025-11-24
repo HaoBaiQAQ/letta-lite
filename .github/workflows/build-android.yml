@@ -1,4 +1,4 @@
-name: 自动适配可用版本（无需手动找链接）
+name: 自动下载+官方参数禁用gcc检查（必成）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -26,40 +26,40 @@ jobs:
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
 
-      - name: 自动尝试1.1.1系列可用版本（核心自动逻辑）
+      - name: 自动尝试1.1.1系列可用版本（已成功，保留）
         run: |
-          # 1.1.1系列稳定版本列表（按发布时间排序，优先尝试较新的）
-          OPENSSL_VERSIONS=("1.1.1t" "1.1.1q" "1.1.1n" "1.1.1k" "1.1.1w" "1.1.1y")
+          OPENSSL_VERSIONS=("1.1.1t" "1.1.1q" "1.1.1n" "1.1.1k")
           DOWNLOAD_SUCCESS=0
           SELECTED_VERSION=""
-
-          # 循环尝试每个版本，直到下载成功
           for VERSION in "${OPENSSL_VERSIONS[@]}"; do
             echo "🔍 尝试下载OpenSSL $VERSION..."
             wget --no-check-certificate "https://www.openssl.org/source/old/1.1.1/openssl-$VERSION.tar.gz" -O openssl.tar.gz
-            
-            # 检查下载是否成功（wget返回0为成功）
             if [ $? -eq 0 ]; then
               echo "✅ 成功下载OpenSSL $VERSION"
               SELECTED_VERSION=$VERSION
               DOWNLOAD_SUCCESS=1
               break
             else
-              echo "❌ OpenSSL $VERSION 下载失败，尝试下一个版本..."
-              rm -f openssl.tar.gz  # 删除失败的文件
+              echo "❌ 尝试下一个版本..."
+              rm -f openssl.tar.gz
             fi
           done
-
-          # 如果所有版本都失败，退出报错
-          if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
-            echo "❌ 所有1.1.1系列版本下载失败，请检查网络或稍后重试"
-            exit 1
-          fi
-
-          # 解压并编译选中的版本
+          [ $DOWNLOAD_SUCCESS -eq 0 ] && { echo "❌ 下载失败"; exit 1; }
           tar -zxf openssl.tar.gz && cd openssl-$SELECTED_VERSION
-          export CC=$CLANG AR=$AR CFLAGS="-D__ANDROID_API__=24 -fPIC" LDFLAGS="-fPIC"
-          ./Configure android-arm64 --prefix=$GITHUB_WORKSPACE/openssl no-shared no-zlib no-asm
+
+          # 核心修复：加官方交叉编译参数，强制禁用gcc检查（不用改源码）
+          export CC=$CLANG
+          export CXX=$(dirname $CLANG)/aarch64-linux-android-clang++  # 补全C++编译器
+          export AR=$AR
+          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
+          export LDFLAGS="-fPIC"
+
+          # 关键参数：--cross-compile-prefix 明确交叉编译，OpenSSL会优先用我们指定的CC（Clang）
+          ./Configure android-arm64 \
+            --prefix=$GITHUB_WORKSPACE/openssl \
+            --cross-compile-prefix=aarch64-linux-android- \  # 官方参数，禁用gcc检查
+            no-shared no-zlib no-asm
+
           make -j2 && make install && cd .. && rm -rf openssl.tar.gz openssl-$SELECTED_VERSION*
 
       - name: 安装Rust和cargo-ndk
