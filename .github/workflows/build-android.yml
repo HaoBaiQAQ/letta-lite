@@ -1,10 +1,9 @@
-name: 最终方案：Rust安卓编译（彻底解决OpenSSL依赖）
+name: 最终方案：Rust安卓编译（系统安全+依赖隔离）
 on: [workflow_dispatch]
 jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      # 强制固定NDK路径和目标API，避免自动变更
       ANDROID_NDK_VERSION: r25c
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
@@ -13,55 +12,56 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 清理系统OpenSSL残留（阻断系统路径干扰）
-        run: |
-          # 删除系统x86_64的OpenSSL头文件和库，避免编译器误找
-          sudo rm -rf /usr/include/openssl
-          sudo rm -rf /usr/lib/x86_64-linux-gnu/libssl* /usr/lib/x86_64-linux-gnu/libcrypto*
-
-      - name: 安装基础依赖（无任何OpenSSL相关包）
+      - name: 安装基础依赖（保留系统必要库，不删任何系统文件）
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            coreutils pkg-config make perl wget curl gcc \
-            cmake  # 辅助OpenSSL交叉编译
+            coreutils pkg-config make perl wget curl gcc cmake \
+            libssl-dev  # 恢复系统库，让sudo正常运行，但编译时不用它
 
-      - name: 强制安装NDK r25c（锁定版本，拒绝自动升级）
+      - name: 强制安装NDK r25c（锁定版本，禁用自动升级）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
           add-to-path: true
-          api-level: ${{ env.ANDROID_API_LEVEL }}  # 统一目标API版本
+          api-level: ${{ env.ANDROID_API_LEVEL }}
       - run: |
-          # 验证NDK版本，确保是r25c
           echo "NDK路径：$ANDROID_NDK_ROOT"
           $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang --version
 
-      - name: 配置Rust环境（锁定工具链+目标架构）
+      - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（锁定版本）
+      - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 清理旧编译缓存（避免残留冲突）
+      - name: 清理编译缓存
         run: cargo clean
 
-      - name: 编译项目（强制OpenSSL自动交叉编译）
+      - name: 编译项目（强制隔离系统OpenSSL，只用自动编译版）
         run: |
-          # 核心配置：强制openssl-sys自动下载+编译安卓版OpenSSL
+          # 核心：强制openssl-sys自动下载+编译安卓版，忽略系统库
           export OPENSSL_VENDORED=1
-          export OPENSSL_NO_VENDOR=0  # 显式禁用系统OpenSSL
+          export OPENSSL_NO_VENDOR=0
           export PKG_CONFIG_ALLOW_CROSS=1
           
-          # 明确指定安卓交叉编译器和sysroot（NDK提供的安卓系统头文件路径）
+          # 关键：屏蔽系统OpenSSL路径，让编译器找不到
+          export PKG_CONFIG_PATH=""
+          export C_INCLUDE_PATH=""
+          export LIBRARY_PATH=""
+          
+          # 指定安卓交叉编译器和系统头文件路径（只找NDK的安卓环境）
           export CARGO_TARGET_${TARGET_ARCH//-/_}_LINKER="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
           export SYSROOT="$ANDROID_NDK_ROOT/platforms/android-${ANDROID_API_LEVEL}/arch-${TARGET_ARCH%*-*}"
-          export CFLAGS="--sysroot=$SYSROOT -fPIC"
+          export CFLAGS="--sysroot=$SYSROOT -fPIC -I/tmp/openssl-include"
           export CXXFLAGS="--sysroot=$SYSROOT -fPIC"
 
-          # 执行编译，openssl-sys会自动下载源码并交叉编译适配版本
+          # 提前创建OpenSSL临时目录，确保自动编译时路径有效
+          mkdir -p /tmp/openssl-include /tmp/openssl-lib
+          
+          # 执行编译，openssl-sys会自动下载源码并交叉编译安卓aarch64版本
           mkdir -p target/android
           cargo ndk -t $TARGET_ARCH -o target/android build --profile mobile
 
