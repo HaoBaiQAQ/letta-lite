@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.letta.app"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <!-- 支持Android 7.0+ -->
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="33" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@android:mipmap/sym_def_app_icon"
+        android:label="Lettalite"
+        android:theme="@android:style/Theme.Light"
+        android:hardwareAccelerated="false">
+
+        <!-- 主Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Lettalite">
+            <<<<intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </</</</intent-filter>
+        </activity>
+    </application>
+</manifest>
