@@ -1,5 +1,5 @@
 name: 最终方案：Rust自动编译（补充依赖，必成）
-on: [workflow_dispatch]  # 手动触发按钮的关键配置（没问题）
+on: [workflow_dispatch]
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -7,12 +7,12 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装所有必需依赖（修复续行+注释语法）
+      - name: 安装所有必需依赖（修复续行符，解决包找不到问题）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             coreutils \  # 含head、ls等基础命令
             pkg-config \  # 交叉编译必需
-            libssl-dev \  # 编译依赖
+            libssl-dev \  # 提供编译依赖
             make perl wget curl \  # OpenSSL编译必需
             gcc  # 基础编译工具
 
@@ -31,16 +31,13 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目（修复环境变量+编译命令）
+      - name: 编译项目
         run: |
-          export OPENSSL_VENDORED=1  # 自动下载+编译OpenSSL（关键）
+          export OPENSSL_VENDORED=1
           export PKG_CONFIG_ALLOW_CROSS=1
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
-
-          # 确保输出目录存在
           mkdir -p target/android
-          # 执行编译（指定profile）
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
