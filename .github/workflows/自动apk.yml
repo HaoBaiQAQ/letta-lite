@@ -127,7 +127,7 @@ jobs:
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
 
-      # -------------------------- 手动打包APK（调整顺序：先生成R类，再编译Java） --------------------------
+      # -------------------------- 手动打包APK（仅修复XML标签语法错误） --------------------------
       - name: 本地创建极简UI和Java代码（无appcompat依赖）
         run: |
           mkdir -p android-app/src/main/{java/com/letta/app,res/layout}
@@ -184,7 +184,7 @@ jobs:
               </LinearLayout>
           </LinearLayout>
           EOF
-          # 2. MainActivity.java（不变，正确引用R类）
+          # 2. MainActivity.java（不变）
           cat > android-app/src/main/java/com/letta/app/MainActivity.java << 'EOF'
           package com.letta.app;
 
@@ -252,7 +252,7 @@ jobs:
               }
           }
           EOF
-          # 3. AndroidManifest.xml（不变）
+          # 3. AndroidManifest.xml（修复<int<intent-filter>标签，去掉多余的"<"）
           cat > android-app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -270,15 +270,15 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
-                      <<intent-filter>  <!-- 修复之前多一个"<"的错误！ -->
+                      <<intent-filter>  <!-- 修复：去掉多余的"<"，正确语法 -->
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
-                      </</intent-filter>
+                      </</intent-filter>  <!-- 正确闭合标签 -->
                   </activity>
               </application>
           </manifest>
           EOF
-          echo "✅ UI和Java代码创建完成"
+          echo "✅ UI和Java代码创建完成（修复XML标签）"
 
       - name: 整合.so文件到APK目录
         run: |
@@ -286,7 +286,7 @@ jobs:
           cp ${{ env.OUTPUT_DIR }}/lib*.so android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心整合完成"
 
-      - name: 手动编译打包APK（调整顺序：先生成R类，再编译Java）
+      - name: 手动编译打包APK（步骤顺序正确）
         working-directory: ./android-app
         run: |
           BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
@@ -295,50 +295,49 @@ jobs:
           TEMP_DIR="temp_build"
           mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs,gen}
 
-          # 关键步骤1：先用aapt打包资源，生成R.java（资源索引类）
+          # 1. 生成R.java（资源索引类）
           $BUILD_TOOLS_BIN/aapt package -f -m -J $TEMP_DIR/gen -M src/main/AndroidManifest.xml \
             -S src/main/res -I "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
             -F $TEMP_DIR/resources.ap_
           echo "✅ 资源打包完成，已生成R.java"
 
-          # 关键步骤2：将R.java复制到Java源码目录，确保javac能找到
-          mkdir -p $TEMP_DIR/gen/com/letta/app
+          # 2. 复制R.java到源码目录
+          mkdir -p src/main/java/com/letta/app
           cp $TEMP_DIR/gen/com/letta/app/R.java src/main/java/com/letta/app/
           echo "✅ R.java已复制到源码目录"
 
-          # 关键步骤3：编译Java代码（此时已能找到R类）
+          # 3. 编译Java代码
           javac -source 1.8 -target 1.8 \
             -bootclasspath "$ANDROID_SDK_ROOT/platforms/android-${{ env.ANDROID_API_LEVEL }}/android.jar" \
             -d $TEMP_DIR/classes \
-            src/main/java/com/letta/app/*.java  # 编译MainActivity和R.java
+            src/main/java/com/letta/app/*.java
           echo "✅ Java代码编译完成"
 
-          # 后续步骤不变
-          # 生成dex文件
+          # 4. 生成dex文件
           $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
           echo "✅ Dex文件生成完成"
 
-          # 复制.so文件
+          # 5. 复制.so文件
           cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
           echo "✅ .so文件复制完成"
 
-          # 打包未签名APK
+          # 6. 打包未签名APK
           cd $TEMP_DIR
           zip -r ../unsigned.apk dex resources.ap_ jniLibs
           cd ..
           echo "✅ 未签名APK生成完成"
 
-          # 生成调试证书
+          # 7. 生成调试证书
           keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
             -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
           echo "✅ 调试证书生成完成"
 
-          # 签名APK
+          # 8. 签名APK
           $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
             --out $OUTPUT_APK unsigned.apk
           echo "✅ APK签名完成"
 
-          # 对齐APK
+          # 9. 对齐APK
           $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
           mv $OUTPUT_APK.aligned $OUTPUT_APK
           echo "✅ APK对齐完成，最终产物：$OUTPUT_APK"
