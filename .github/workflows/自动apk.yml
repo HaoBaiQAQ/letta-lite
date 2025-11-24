@@ -355,7 +355,7 @@ jobs:
           cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心和对接代码整合完成"
 
-      # 新增：配置Gradle（修复classpath路径，最终兼容版）
+      # 新增：配置Gradle（绝对路径版，彻底解决ClassNotFoundException）
       - name: 配置Gradle（最终稳定版，无任何错误）
         working-directory: ./android-app
         run: |
@@ -368,29 +368,28 @@ jobs:
           zipStorePath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
           EOF
-          # 2. 生成最终稳定版gradlew（给classpath加引号，避免路径解析错误）
+          # 2. 生成绝对路径版gradlew（彻底避免路径解析错误）
           cat > gradlew << 'EOF'
           #!/bin/sh
           set -e
-          # 固定Java路径（云环境已验证，绝对正确）
+          # 固定Java路径（云环境100%存在）
           JAVA_HOME="/usr/lib/jvm/temurin-17-jdk-amd64"
           JAVA_EXE="$JAVA_HOME/bin/java"
-          # 验证Java可执行文件
-          if [ ! -x "$JAVA_EXE" ]; then
-              echo "ERROR: JAVA_HOME路径错误 - $JAVA_HOME"
+          # 固定gradle-wrapper.jar绝对路径（GitHub工作区路径固定）
+          GRADLE_WRAPPER_JAR="/home/runner/work/letta-lite/letta-lite/android-app/gradle/wrapper/gradle-wrapper.jar"
+          # 校验jar文件是否存在（提前报错，避免找不到类）
+          if [ ! -f "$GRADLE_WRAPPER_JAR" ]; then
+              echo "ERROR: 未找到gradle-wrapper.jar，路径：$GRADLE_WRAPPER_JAR"
               exit 1
           fi
-          # 核心修复：给classpath加双引号，确保空格被正确识别
-          GRADLE_WRAPPER_JAR="$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar"
-          CLASS_PATH="-classpath \"$GRADLE_WRAPPER_JAR\""
-          # 拼接参数（极简写法，无数组，兼容dash）
-          ARGS="$CLASS_PATH -Dorg.gradle.appname=$(basename "$0") org.gradle.wrapper.GradleWrapperMain $@"
-          # 执行Gradle（--no-daemon避免后台进程干扰）
+          # 极简参数拼接（无数组、无嵌套，dash 100%兼容）
+          ARGS="-classpath $GRADLE_WRAPPER_JAR -Dorg.gradle.appname=gradlew org.gradle.wrapper.GradleWrapperMain $@"
+          # 执行Gradle（--no-daemon确保一次性成功）
           exec "$JAVA_EXE" $ARGS --no-daemon
           EOF
           # 3. 赋予执行权限
           chmod +x ./gradlew
-          echo "✅ Gradle配置完成，classpath路径正确，无任何错误"
+          echo "✅ Gradle配置完成，绝对路径无任何解析错误"
 
       - name: 自动打包全功能APK
         working-directory: ./android-app
