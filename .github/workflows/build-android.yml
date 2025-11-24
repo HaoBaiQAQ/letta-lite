@@ -1,4 +1,4 @@
-name: 根源解决版（删gcc检查代码+精准配置）
+name: 精准删报错代码版（不双NDK，一次解决）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -10,7 +10,7 @@ jobs:
       - name: 安装必需依赖
         run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip findutils sed
 
-      - name: 安装NDK r25c（锁定版本）
+      - name: 安装NDK r25c（锁定版本，不双NDK）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
@@ -18,35 +18,35 @@ jobs:
 
       - name: 自动探测NDK根目录+找Clang
         run: |
-          # 找NDK根目录
+          # 找NDK根目录（不猜路径，避免出错）
           NDK_BUILD=$(which ndk-build)
           [ -z "$NDK_BUILD" ] && { echo "❌ 未找到NDK"; exit 1; }
           NDK_ROOT=$(dirname $(dirname $(dirname $NDK_BUILD)))
           echo "✅ NDK根目录：$NDK_ROOT"
 
-          # 找Clang（灵活匹配）
+          # 找Clang（灵活匹配，确保找到）
           CLANG=$(find $NDK_ROOT -name "aarch64-linux-android*clang" -type f | grep -v "clang++" | head -1)
           [ -z "$CLANG" ] && { echo "❌ 未找到Clang"; exit 1; }
           echo "✅ 找到Clang：$CLANG"
 
-          # 输出关键变量
+          # 输出关键变量（供后续使用）
           echo "CLANG=$CLANG" >> $GITHUB_ENV
           echo "AR=$(dirname $CLANG)/llvm-ar" >> $GITHUB_ENV
-          echo "CLANG_BIN_DIR=$(dirname $CLANG)" >> $GITHUB_ENV
 
-      - name: 下载OpenSSL+删除gcc检查代码（核心！）
+      - name: 下载OpenSSL+精准删除gcc报错代码（核心！）
         run: |
           # 下载解压
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -zxf openssl-1.1.1w.tar.gz && cd openssl-1.1.1w
 
-          # 关键操作：用sed删掉OpenSSL配置脚本里的gcc检查代码
-          # 目标代码：检查是否存在aarch64-linux-android-gcc，不存在则报错
-          sed -i '/check_gcc.*aarch64-linux-android-gcc/d' Configure
-          sed -i '/die "no NDK aarch64-linux-android-gcc on \$PATH"/d' Configure
-          echo "✅ 已删除OpenSSL的gcc检查代码"
+          # 关键修正：直接匹配报错信息，不管代码格式，强制删除！
+          # 报错信息是：no NDK aarch64-linux-android-gcc on $PATH
+          sed -i '/no NDK aarch64-linux-android-gcc on \$PATH/d' Configure
+          # 同时删除调用检查函数的行（匹配更灵活，忽略空格）
+          sed -i '/check_gcc/s/^/#/' Configure  # 给所有check_gcc开头的行加注释，禁用它们
+          echo "✅ 已强制删除gcc检查相关代码"
 
-          # 编译配置
+          # 编译配置（明确指定Clang，不依赖GCC）
           export CC=$CLANG
           export AR=$AR
           export CFLAGS="-D__ANDROID_API__=24 -fPIC"
@@ -56,7 +56,7 @@ jobs:
             --prefix=$GITHUB_WORKSPACE/openssl \
             no-shared no-zlib no-asm
 
-          # 编译安装
+          # 编译安装（限制线程，避免资源不足）
           make -j2 && make install && cd .. && rm -rf openssl-1.1.1w*
           echo "✅ OpenSSL编译完成！"
 
