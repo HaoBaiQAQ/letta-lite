@@ -1,4 +1,4 @@
-name: NDK r25c适配版（无废弃脚本，必成）
+name: 方案1：Rust vendored自动编译OpenSSL
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -7,74 +7,33 @@ jobs:
       - name: 拉取源码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
-
-      - name: 安装NDK r25c（稳定版）
+      - name: 安装NDK r25c（仅需提供编译器，不用手动配置）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 直接引用NDK自带的Clang（不用生成工具链）
-        run: |
-          # NDK r25c的Clang固定路径（所有CI环境都一样，不会错）
-          NDK_ROOT=$(dirname $(dirname $(dirname $(which ndk-build))))
-          CLANG_DIR="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          # 直接用带API24后缀的Clang（适配目标API，不用手动加参数）
-          CLANG="$CLANG_DIR/aarch64-linux-android24-clang"
-          AR="$CLANG_DIR/aarch64-linux-android-ar"
-          
-          # 验证工具是否存在（避免路径错误）
-          [ -f "$CLANG" ] || { echo "❌ 未找到Clang：$CLANG"; exit 1; }
-          echo "✅ 找到Clang：$CLANG"
-          
-          # 配置环境变量，供后续使用
-          echo "CLANG=$CLANG" >> $GITHUB_ENV
-          echo "AR=$AR" >> $GITHUB_ENV
-          echo "CLANG_DIR=$CLANG_DIR" >> $GITHUB_ENV
-          echo "PATH=$CLANG_DIR:$PATH" >> $GITHUB_ENV
-
-      - name: 下载OpenSSL官方稳定源码（永久有效）
-        run: |
-          # 官方HTTP归档链接，不跳转，无404风险
-          wget --no-check-certificate "http://www.openssl.org/source/openssl-1.1.1k.tar.gz" -O openssl.tar.gz
-          tar -zxf openssl.tar.gz && cd openssl-1.1.1k
-          echo "✅ 成功解压OpenSSL源码"
-
-      - name: 编译OpenSSL（适配NDK r25c，无gcc检查）
-        run: |
-          cd openssl-1.1.1k
-          # 明确指定Clang和AR，NDK新版本会自动跳过gcc检查
-          export CC=$CLANG
-          export AR=$AR
-          export CFLAGS="-fPIC"
-          export LDFLAGS="-fPIC"
-          
-          # 官方配置参数，适配安卓aarch64
-          ./Configure android-arm64 \
-            --prefix=$GITHUB_WORKSPACE/openssl \
-            no-shared no-zlib no-asm
-          
-          # 编译安装（-j2适配CI资源）
-          make -j2 && make install && cd .. && rm -rf openssl.tar.gz openssl-1.1.1k*
-          echo "✅ OpenSSL编译完成！"
-
-      - name: 安装Rust和cargo-ndk
+      - name: 安装Rust和目标架构
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
           target: aarch64-linux-android
       - run: cargo install cargo-ndk --version 3.5.4 --locked
 
-      - name: 编译项目
+      - name: 编译项目（启用vendored自动编译OpenSSL）
         run: |
-          export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
-          export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
+          # 关键：设置环境变量，让openssl-sys自动下载并交叉编译OpenSSL
+          export OPENSSL_NO_VENDOR=0
+          export OPENSSL_VENDORED=1
+          # 告诉cargo使用NDK的Clang
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android-clang
+          export CFLAGS="-D__ANDROID_API__=24 -fPIC"
+          
+          # 编译，openssl-sys会自动处理所有OpenSSL相关步骤
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android
+          name: letta-lite-android-vendored
           path: target/android/*.so
