@@ -10,6 +10,8 @@ jobs:
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      # 明确产物输出目录
+      OUTPUT_DIR: ${{ github.workspace }}/target/android
 
     steps:
       - name: 拉取letta-lite源码
@@ -21,35 +23,50 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      - name: 安装NDK 27.3.13750724
+      - name: 正确安装NDK 27.3.13750724（修复参数错误）
         uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
-          api-level: ${{ env.ANDROID_API_LEVEL }}
+          cmdline-tools-version: "latest"  # 必须配置：安装基础工具链
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }};platforms;android-${{ env.ANDROID_API_LEVEL }}"  # 正确指定NDK和API级别
+          accept-android-sdk-licenses: true  # 自动接受许可证
 
-      - name: 验证NDK并配置工具链
+      - name: 验证NDK配置
         run: |
           echo "✅ NDK路径：$ANDROID_NDK_ROOT"
           NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          if [ -f "$COMPILER_PATH" ] && [ -d "$NDK_SYSROOT/usr/include" ]; then
-            echo "✅ 编译器和头文件路径正确"
+          echo "NDK_SYSROOT=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
+          # 验证编译器存在
+          if [ -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "✅ 编译器存在"
           else
-            echo "❌ 路径错误"
+            echo "❌ 编译器缺失"
             exit 1
           fi
 
-      - name: 下载OpenSSL官方源码
+      - name: 下载并编译OpenSSL
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          # 编译OpenSSL
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          ./Configure linux-aarch64 \
+            no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          make -j$(nproc) V=1
+          make install_sw && echo "✅ OpenSSL编译完成"
 
-      - name: 配置Rust环境（确保目标架构已添加）
+      - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
@@ -58,43 +75,42 @@ jobs:
       - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 清理缓存
-        run: cargo clean
-
-      - name: 编译OpenSSL
+      - name: 确保项目配置为cdylib（生成.so的关键）
         run: |
-          cd ${{ env.OPENSSL_SRC_DIR }}
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
-          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
-          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
-          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          # 在Cargo.toml中添加cdylib类型（如果没有）
+          if ! grep -q "crate-type = \[\"cdylib\"" Cargo.toml; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> Cargo.toml
+            echo "✅ 已添加cdylib配置"
+          fi
+          # 显示Cargo.toml配置，确认生效
+          cat Cargo.toml | grep -A 2 "\[lib\]"
 
-          ./Configure linux-aarch64 \
-            no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-
-          make -j$(nproc) V=1
-          make install_sw && echo "✅ OpenSSL编译完成"
-
-      - name: 编译letta-lite（核心修复：移除无效特性参数）
+      - name: 清理缓存并编译（强制生成.so）
         run: |
+          cargo clean
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
+          # 关键：添加--release，确保生成release版本.so；-o指定输出目录
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build --profile mobile --release
+          # 调试：列出产物目录结构，确认.so存在
+          echo "✅ 产物目录结构："
+          ls -l ${{ env.OUTPUT_DIR }}
+          # 如果产物在默认路径，复制到指定目录
+          if [ -z "$(ls -A ${{ env.OUTPUT_DIR }})" ]; then
+            echo "⚠️  目标目录无产物，尝试复制默认路径产物"
+            mkdir -p ${{ env.OUTPUT_DIR }}
+            cp target/${{ env.TARGET_ARCH }}/release/lib*.so ${{ env.OUTPUT_DIR }}/
+            ls -l ${{ env.OUTPUT_DIR }}
+          fi
 
-          mkdir -p target/android
-          # 关键修复：删掉--no-default-features和--features "android"（项目无此特性）
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o target/android build --profile mobile
-
-      - name: 上传产物
+      - name: 上传产物（兼容多种路径）
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite-android-so
-          path: target/android/*.so
+          # 匹配target/android和默认路径的.so文件，确保不遗漏
+          path: |
+            ${{ env.OUTPUT_DIR }}/*.so
+            target/${{ env.TARGET_ARCH }}/release/*.so
           retention-days: 14
