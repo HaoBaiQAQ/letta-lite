@@ -287,21 +287,17 @@ jobs:
               }
           }
           EOF
-          # 3. 创建安卓构建配置文件（build.gradle）—— 核心修复：适配老Gradle版本
+          # 3. 创建安卓构建配置文件（build.gradle）—— 最终兼容配置
           cat > android-app/build.gradle << EOF
-          // 修复1：指定兼容老Gradle的插件仓库和版本（3.6.4是稳定兼容版）
           buildscript {
               repositories {
-                  // 老Gradle不支持google()，改用具体URL
                   maven { url 'https://maven.google.com' }
                   mavenCentral()
               }
               dependencies {
-                  // 修复2：用3.6.4版本（兼容Gradle 4.4.1）
                   classpath 'com.android.tools.build:gradle:3.6.4'
               }
           }
-          // 修复3：老Gradle用apply plugin声明，不用plugins块
           apply plugin: 'com.android.application'
           android {
               compileSdkVersion 33
@@ -335,17 +331,16 @@ jobs:
               }
           }
           dependencies {
-              implementation 'androidx.appcompat:appcompat:1.2.0'  // 适配低版本插件
+              implementation 'androidx.appcompat:appcompat:1.2.0'
               implementation 'com.google.android.material:material:1.3.0'
               testImplementation 'junit:junit:4.13.2'
               androidTestImplementation 'androidx.test.ext:junit:1.1.2'
               androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
           }
           EOF
-          # 4. 创建settings.gradle（修复：标准项目结构配置）
+          # 4. 创建settings.gradle
           cat > android-app/settings.gradle << EOF
           rootProject.name = "LettaliteApp"
-          // 标准配置：app模块就是当前android-app目录
           include ':app'
           EOF
           echo "✅ 本地创建UI文件完成，无外部依赖，稳定可靠"
@@ -360,18 +355,35 @@ jobs:
           cp letta_api.h android-app/src/main/jniLibs/arm64-v8a/
           echo "✅ .so核心和对接代码整合完成"
 
+      # 新增：强制升级Gradle到5.6.4（兼容Android插件3.6.4）
+      - name: 配置Gradle版本（强制使用5.6.4）
+        working-directory: ./android-app
+        run: |
+          # 创建gradle-wrapper.properties，指定Gradle版本
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << EOF
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          # 强制使用5.6.4版本（兼容插件3.6.4）
+          distributionUrl=https\://services.gradle.org/distributions/gradle-5.6.4-all.zip
+          EOF
+          echo "✅ Gradle版本配置完成，将自动下载5.6.4"
+
       - name: 自动打包全功能APK
         working-directory: ./android-app
         run: |
-          # 编译生成Debug版APK（可直接安装到手机，无需签名）
-          gradle assembleDebug --info
+          # 用gradlew（wrapper）编译，自动使用指定版本
+          chmod +x ./gradlew || true
+          ./gradlew assembleDebug --info
           echo "✅ APK打包完成"
           # 显示APK路径，确保产物存在
-          ls -l build/outputs/apk/debug/
+          ls -l app/build/outputs/apk/debug/
 
       - name: 上传全功能APK（供直接下载安装）
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite-全功能安卓APK（直接安装）
-          path: android-app/build/outputs/apk/debug/app-debug.apk
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
