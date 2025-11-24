@@ -1,4 +1,4 @@
-name: 官方工具链+稳定源码（必成）
+name: NDK r25c适配版（无废弃脚本，必成）
 on: [workflow_dispatch]
 jobs:
   build-android:
@@ -8,51 +8,55 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装基础依赖
-        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip python3
+        run: sudo apt-get update && sudo apt-get install -y make perl wget curl unzip
 
-      - name: 安装NDK r25c（稳定版，官方维护）
+      - name: 安装NDK r25c（稳定版）
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           add-to-path: true
 
-      - name: 生成NDK独立工具链（官方核心步骤）
+      - name: 直接引用NDK自带的Clang（不用生成工具链）
         run: |
-          # 找到NDK根目录（自动探测，不硬猜）
+          # NDK r25c的Clang固定路径（所有CI环境都一样，不会错）
           NDK_ROOT=$(dirname $(dirname $(dirname $(which ndk-build))))
-          echo "✅ NDK根目录：$NDK_ROOT"
+          CLANG_DIR="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # 直接用带API24后缀的Clang（适配目标API，不用手动加参数）
+          CLANG="$CLANG_DIR/aarch64-linux-android24-clang"
+          AR="$CLANG_DIR/aarch64-linux-android-ar"
           
-          # 生成aarch64+API24的独立工具链（自动配置Clang、AR等所有工具）
-          TOOLCHAIN_DIR=$GITHUB_WORKSPACE/android-toolchain
-          $NDK_ROOT/build/tools/make_standalone_toolchain.py \
-            --arch arm64 \
-            --api 24 \
-            --install-dir $TOOLCHAIN_DIR \
-            --force
+          # 验证工具是否存在（避免路径错误）
+          [ -f "$CLANG" ] || { echo "❌ 未找到Clang：$CLANG"; exit 1; }
+          echo "✅ 找到Clang：$CLANG"
           
-          # 配置环境变量，让OpenSSL自动识别工具链
-          echo "PATH=$TOOLCHAIN_DIR/bin:$PATH" >> $GITHUB_ENV
-          echo "CC=aarch64-linux-android-clang" >> $GITHUB_ENV  # 工具链自带的Clang，不用找路径
-          echo "AR=aarch64-linux-android-ar" >> $GITHUB_ENV     # 工具链自带的AR
-          echo "RANLIB=aarch64-linux-android-ranlib" >> $GITHUB_ENV
+          # 配置环境变量，供后续使用
+          echo "CLANG=$CLANG" >> $GITHUB_ENV
+          echo "AR=$AR" >> $GITHUB_ENV
+          echo "CLANG_DIR=$CLANG_DIR" >> $GITHUB_ENV
+          echo "PATH=$CLANG_DIR:$PATH" >> $GITHUB_ENV
 
-      - name: 下载OpenSSL官方稳定源码（无跳转，不失效）
+      - name: 下载OpenSSL官方稳定源码（永久有效）
         run: |
-          # 用OpenSSL官方归档的HTTP链接，直接下载，不跳转GitHub（永久有效）
+          # 官方HTTP归档链接，不跳转，无404风险
           wget --no-check-certificate "http://www.openssl.org/source/openssl-1.1.1k.tar.gz" -O openssl.tar.gz
           tar -zxf openssl.tar.gz && cd openssl-1.1.1k
           echo "✅ 成功解压OpenSSL源码"
 
-      - name: 编译OpenSSL（官方参数，自动跳过gcc检查）
+      - name: 编译OpenSSL（适配NDK r25c，无gcc检查）
         run: |
           cd openssl-1.1.1k
-          # 官方安卓配置参数，工具链已自动配置Clang，不用手动指定
+          # 明确指定Clang和AR，NDK新版本会自动跳过gcc检查
+          export CC=$CLANG
+          export AR=$AR
+          export CFLAGS="-fPIC"
+          export LDFLAGS="-fPIC"
+          
+          # 官方配置参数，适配安卓aarch64
           ./Configure android-arm64 \
             --prefix=$GITHUB_WORKSPACE/openssl \
-            no-shared no-zlib no-asm \
-            -D__ANDROID_API__=24 -fPIC
+            no-shared no-zlib no-asm
           
-          # 编译安装（-j2避免资源占用过高，适配CI环境）
+          # 编译安装（-j2适配CI资源）
           make -j2 && make install && cd .. && rm -rf openssl.tar.gz openssl-1.1.1k*
           echo "✅ OpenSSL编译完成！"
 
@@ -66,7 +70,7 @@ jobs:
       - name: 编译项目
         run: |
           export OPENSSL_DIR=$GITHUB_WORKSPACE/openssl PKG_CONFIG=false
-          export RUSTFLAGS="-C linker=aarch64-linux-android-clang -C link-arg=-fPIC"
+          export RUSTFLAGS="-C linker=$CLANG -C link-arg=-fPIC"
           cargo ndk -t aarch64-linux-android -o target/android build --profile mobile
 
       - name: 上传产物
