@@ -1,4 +1,4 @@
-name: Android 自动编译+发布
+name: Android 自动编译+发布（解决OpenSSL依赖）
 on:
   push:
     tags:
@@ -8,73 +8,131 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    env:
+      # OpenSSL配置（与参考脚本一致，确保兼容）
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      # Android配置
+      ANDROID_API_LEVEL: 24
+      TARGET_ARCH: aarch64-linux-android
+      NDK_VERSION: 23.2.8568313  # 官方要求23+稳定版本
+
     steps:
       - name: 拉取源码
         uses: actions/checkout@v4
         with:
           submodules: true  # 拉取子模块（避免官方脚本依赖缺失）
 
-      - name: 安装基础依赖（不含NDK，用action单独安装）
+      - name: 安装基础依赖
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo openjdk-17-jdk android-sdk-platform-tools \
             coreutils pkg-config make perl wget curl gcc cmake \
-            libssl-dev zlib1g-dev  # 补充编译所需基础工具
+            libssl-dev zlib1g-dev unzip  # 补充编译所需工具
 
-      - name: 正确安装NDK（使用android-actions，避免apt包名错误）
+      - name: 安装NDK（使用android-actions，避免apt错误）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          # 安装NDK 23.2.8568313（官方要求23+，选择稳定版本）+ 对应API平台
-          packages: "ndk;23.2.8568313 platforms;android-24"
+          packages: "ndk;${{ env.NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
       - name: 验证NDK并配置环境变量
         run: |
-          # 查找NDK安装路径
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep "23.2.8568313")
+          # 查找NDK路径
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep "${{ env.NDK_VERSION }}")
           if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK 23.2.8568313"
+            echo "❌ 未找到NDK ${{ env.NDK_VERSION }}"
             exit 1
           fi
-          # 配置NDK环境变量（传递给官方编译脚本）
-          export ANDROID_NDK_ROOT=$NDK_PATH
-          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          # 配置NDK工具链路径
+          NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          # 导出环境变量
+          echo "ANDROID_NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "PATH=$PATH:$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          # 验证编译器存在
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/aarch64-linux-android24-clang" ]; then
-            echo "❌ 编译器缺失"
+          # 验证编译器
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 编译器 ${env.TARGET_ARCH}${env.ANDROID_API_LEVEL}-clang 缺失"
             exit 1
           fi
-          echo "✅ NDK验证通过，路径：$ANDROID_NDK_ROOT"
+          echo "✅ NDK验证通过，路径：$NDK_PATH"
 
-      - name: 调用官方脚本编译Android产物
+      # ===================== 关键：手动编译Android版OpenSSL =====================
+      - name: 下载并交叉编译OpenSSL（适配aarch64）
+        run: |
+          # 创建目录
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          # 下载OpenSSL源码
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          # 配置交叉编译参数（适配Android aarch64）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          # 执行OpenSSL配置（linux-aarch64适配Android arm64-v8a）
+          ./Configure linux-aarch64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          # 编译并安装（-j$(nproc) 多线程加速）
+          make -j$(nproc) V=1
+          make install_sw
+          echo "✅ OpenSSL交叉编译完成，安装路径：${{ env.OPENSSL_INSTALL_DIR }}"
+          # 验证编译产物
+          ls -l ${{ env.OPENSSL_INSTALL_DIR }}/lib  # 查看生成的静态库
+          ls -l ${{ env.OPENSSL_INSTALL_DIR }}/include  # 查看头文件
+
+      - name: 配置OpenSSL环境变量（告知Cargo查找路径）
+        run: |
+          # 设置OpenSSL相关环境变量，让openssl-sys crate找到依赖
+          echo "OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV  # 允许pkg-config交叉编译
+          # 验证环境变量
+          echo "✅ OpenSSL环境变量配置完成："
+          echo "  OPENSSL_DIR: ${{ env.OPENSSL_INSTALL_DIR }}"
+          echo "  OPENSSL_INCLUDE_DIR: ${{ env.OPENSSL_INSTALL_DIR }}/include"
+          echo "  OPENSSL_LIB_DIR: ${{ env.OPENSSL_INSTALL_DIR }}/lib"
+
+      - name: 调用官方脚本编译Android产物（传递OpenSSL环境变量）
         run: |
           # 给官方脚本执行权限
           chmod +x ./scripts/build-android.sh
-          # 传递NDK路径给官方脚本，确保编译时使用正确的NDK
-          ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }} ./scripts/build-android.sh
-          # 查看产物目录（官方脚本默认输出路径）
+          # 传递NDK和OpenSSL环境变量，确保编译时能找到依赖
+          ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }} \
+          OPENSSL_DIR=${{ env.OPENSSL_DIR }} \
+          OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INCLUDE_DIR }} \
+          OPENSSL_LIB_DIR=${{ env.OPENSSL_LIB_DIR }} \
+          ./scripts/build-android.sh
+          # 查看产物目录
           echo "=== 产物目录结构 ==="
           ls -l ./bindings/android/  # Kotlin绑定库（.aar文件）
-          ls -l ./target/aarch64-linux-android/mobile/  # .so文件（mobile profile）
-          ls -l ./target/aarch64-linux-android/release/  # .so文件（release profile）
+          ls -l ./target/${{ env.TARGET_ARCH }}/mobile/  # .so文件（mobile profile）
+          ls -l ./target/${{ env.TARGET_ARCH }}/release/  # .so文件（release profile）
 
-      - name: 准备发布产物（兼容官方脚本可能的输出路径）
+      - name: 准备发布产物
         run: |
-          # 创建统一产物目录
           mkdir -p release-artifacts
           # 复制.so文件（优先mobile profile，不存在则用release）
-          if [ -f ./target/aarch64-linux-android/mobile/libletta_lite.so ]; then
-            cp ./target/aarch64-linux-android/mobile/libletta_lite.so release-artifacts/
-          elif [ -f ./target/aarch64-linux-android/release/libletta_lite.so ]; then
-            cp ./target/aarch64-linux-android/release/libletta_lite.so release-artifacts/
+          if [ -f ./target/${{ env.TARGET_ARCH }}/mobile/libletta_lite.so ]; then
+            cp ./target/${{ env.TARGET_ARCH }}/mobile/libletta_lite.so release-artifacts/
+          elif [ -f ./target/${{ env.TARGET_ARCH }}/release/libletta_lite.so ]; then
+            cp ./target/${{ env.TARGET_ARCH }}/release/libletta_lite.so release-artifacts/
           else
             echo "❌ 未找到libletta_lite.so"
             exit 1
           fi
-          # 复制Kotlin绑定库（.aar文件）
+          # 复制Kotlin绑定库
           if [ -f ./bindings/android/letta-lite-android.aar ]; then
             cp ./bindings/android/letta-lite-android.aar release-artifacts/
           else
@@ -89,22 +147,22 @@ jobs:
       - name: 自动创建GitHub Release并上传产物
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}  # 用标签作为版本号
-          release_name: "Android 版本 ${{ github.ref_name }}"  # Release名称
+          tag_name: ${{ github.ref_name }}
+          release_name: "Android 版本 ${{ github.ref_name }}"
           body: |
-            ## Letta-Lite Android 自动构建版本
-            - 构建方式：调用官方 `scripts/build-android.sh` 脚本
+            ## Letta-Lite Android 自动构建版本（解决OpenSSL依赖）
+            - 构建方式：调用官方 `scripts/build-android.sh` + 手动交叉编译OpenSSL
             - 产物包含：
-              - libletta_lite.so（arm64-v8a架构，兼容Android 24+）
-              - 可选：letta-lite-android.aar（Kotlin绑定库，直接集成调用）
-            - 核心功能：对话交互、记忆管理、本地LLM支持、云同步
-            - 依赖要求：
-              - Android NDK 23.2.8568313+
+              - libletta_lite.so（arm64-v8a架构，Android 24+兼容）
+              - 可选：letta-lite-android.aar（Kotlin绑定库）
+            - 核心功能：对话交互、记忆管理、本地LLM、云同步
+            - 依赖说明：
+              - NDK版本：${{ env.NDK_VERSION }}
+              - OpenSSL版本：${{ env.OPENSSL_VERSION }}（内置交叉编译，无需额外安装）
               - 最小支持Android 7.0（API 24）
-              - 集成方式：参考README.md或官方文档
           files: |
             release-artifacts/libletta_lite.so
             release-artifacts/letta-lite-android.aar
             release-artifacts/README.md
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动提供，无需手动配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
