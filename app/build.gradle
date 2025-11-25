@@ -1,63 +1,53 @@
-// 声明这是 Android 应用模块
+// ########## 修改：引用 settings.gradle 中声明的插件版本 ##########
 plugins {
-    id 'com.android.application'
-    // 如果你用 Kotlin，添加这行：id 'org.jetbrains.kotlin.android'
-    // 如果你用 Rust 集成（letta-lite 是 Rust 项目），后续需要添加 cargo-ndk 插件，这里先预留
+    id 'com.android.application' // 不再写版本号，统一由 settings.gradle 管理
+    // 用 Kotlin 则添加：id 'org.jetbrains.kotlin.android'
 }
 
-// Android 核心配置（根据项目需求调整版本）
 android {
-    namespace "com.letta.lite.mobile" // 必须和 AndroidManifest.xml 的 package 一致！
-    compileSdk 34 // 编译 SDK 版本（建议用 33/34，兼容大部分设备）
+    namespace "com.letta.lite.mobile" // 必须和 AndroidManifest.xml 的 package 一致
+    compileSdk 34 // 兼容 Gradle 8.4.0 + Android 插件 8.4.0
 
-    // 默认配置
     defaultConfig {
-        applicationId "com.letta.lite.mobile" // 应用唯一 ID（和 namespace 一致）
-        minSdk 24 // 最低支持 Android 版本（24 = Android 7.0，可根据需求降低到 21）
-        targetSdk 34 // 目标 SDK 版本（和 compileSdk 一致）
-        versionCode 1 // 版本号（整数，用于升级）
-        versionName "1.0.0" // 版本名称（显示给用户）
+        applicationId "com.letta.lite.mobile"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
 
-        // 测试配置（可选，暂时保留默认）
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // 构建类型（Release 版用于发布，Debug 版用于开发）
     buildTypes {
         release {
-            minifyEnabled false // 是否混淆代码（false = 不混淆，方便调试；发布时可改为 true）
+            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
-    // 编译选项（Java 版本适配）
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    // 如果你用 Kotlin，添加这部分：
+    // Kotlin 配置（可选）
     // kotlinOptions {
     //     jvmTarget = '17'
     // }
 
-    // 资源配置（确保布局文件、图标等能被识别）
     sourceSets {
         main {
-            res.srcDirs = ['src/main/res'] // 资源目录（包含布局文件）
-            manifest.srcFile 'src/main/AndroidManifest.xml' // 清单文件路径
-            java.srcDirs = ['src/main/java'] // Java 代码目录（如果用 Kotlin 就是 src/main/kotlin）
+            res.srcDirs = ['src/main/res']
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = ['src/main/java'] // 无 Java 代码也保留，避免报错
         }
     }
 }
 
-// 依赖库配置（Android 基础依赖，必须添加）
 dependencies {
-    // Android 基础库（AppCompat 用于兼容低版本）
+    // 基础依赖（确保版本兼容）
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    //  Material Design 组件（可选，如需使用更美观的控件）
     implementation 'com.google.android.material:material:1.11.0'
-    // 测试依赖（可选）
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
