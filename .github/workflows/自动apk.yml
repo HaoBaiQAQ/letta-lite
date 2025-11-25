@@ -1,10 +1,11 @@
-name: Letta Lite Android 自动构建（标准路径版）
+name: Letta Lite Android 自动构建（Rust+Android 完整集成版）
 on:
   push:
     branches: [ main ]
     paths:
-      - 'app/src/main/AndroidManifest.xml'  # 监听标准路径的 Manifest
-      - 'anzhuoshifangyingwenjian/**'       # 保留其他文件的监听
+      - 'app/src/main/AndroidManifest.xml'
+      - 'anzhuoshifangyingwenjian/**'
+      - 'core/**'  # 监听 Rust 核心子包变化
       - 'settings.gradle'
       - 'gradle.properties'
       - 'app/build.gradle'
@@ -14,11 +15,124 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 复用你曾经验证成功的环境变量（避免踩坑）
+      ANDROID_NDK_VERSION: 27.3.13750724
+      ANDROID_API_LEVEL: 24
+      TARGET_ARCH: aarch64-linux-android
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      RUST_OUTPUT_DIR: ${{ github.workspace }}/app/src/main/jniLibs/arm64-v8a  # 直接输出到 Android jniLibs（自动打包）
+      CORE_DIR: "core"
+      CORE_PACKAGE_NAME: "letta-core"
+
     steps:
       - name: 拉取项目代码
         uses: actions/checkout@v4
 
-      - name: 配置 Gradle 模块（仅确认 app 模块）
+      # 第一步：编译 Rust 核心（复用你曾经成功的逻辑）
+      - name: 安装基础依赖（支持 Rust+OpenSSL 编译）
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            coreutils pkg-config make perl wget curl gcc cmake \
+            libssl-dev zlib1g-dev
+
+      - name: 安装 NDK（复用成功版本）
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+
+      - name: 验证 NDK 并配置环境变量
+        run: |
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ 未找到 NDK"
+            exit 1
+          fi
+          export ANDROID_NDK_ROOT=$NDK_PATH
+          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 编译器缺失"
+            exit 1
+          fi
+          echo "✅ NDK 验证通过"
+
+      - name: 下载并编译 OpenSSL（适配安卓架构）
+        run: |
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          ./Configure linux-aarch64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          make -j$(nproc) V=1
+          make install_sw && echo "✅ OpenSSL 编译完成"
+
+      - name: 配置 Rust 环境（复用成功版本）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          target: ${{ env.TARGET_ARCH }}
+
+      - name: 安装 cargo-ndk（固定版本）
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: 修复 Rust 工作区配置（生成 cdylib）
+        run: |
+          # 清理根目录无效配置
+          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
+          echo "✅ 已清理根目录 Cargo.toml"
+
+          # 验证子包路径
+          CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
+          if [ ! -f "$CORE_CARGO" ]; then
+            echo "❌ 子包目录不存在"
+            ls -l */Cargo.toml
+            exit 1
+          fi
+
+          # 添加 cdylib 配置（生成 .so 核心）
+          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+            echo "✅ 已添加 cdylib 配置"
+          fi
+          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
+
+      - name: 编译 Rust 核心（--profile mobile，输出到 jniLibs）
+        run: |
+          cargo clean
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
+          # 输出到 Android jniLibs 目录，Gradle 会自动打包
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
+            --package ${{ env.CORE_PACKAGE_NAME }} \
+            --profile mobile
+          echo "✅ Rust 核心编译完成，产物路径："
+          ls -l ${{ env.RUST_OUTPUT_DIR }}
+          # 兜底收集所有 .so 文件，避免路径问题
+          find target -name "lib*.so" -exec cp {} ${{ env.RUST_OUTPUT_DIR }}/ \;
+          echo "✅ 最终 Rust 产物列表："
+          ls -l ${{ env.RUST_OUTPUT_DIR }}
+
+      # 第二步：Android 打包（保留你现在的逻辑，自动集成 Rust 产物）
+      - name: 配置 Gradle 模块（确认 app 模块）
         run: |
           SETTINGS_FILE="settings.gradle"
           if ! grep -q "include ':app'" "$SETTINGS_FILE"; then
@@ -27,15 +141,14 @@ jobs:
           fi
           echo "✅ Gradle 模块配置完成"
 
-      - name: 检查核心文件（仅验证标准路径 Manifest）
+      - name: 检查核心文件（含 Rust 产物）
         run: |
           [ ! -f "./settings.gradle" ] && { echo "❌ 缺少 settings.gradle"; exit 1; }
           [ ! -f "./gradle.properties" ] && { echo "❌ 缺少 gradle.properties"; exit 1; }
           [ ! -f "./app/build.gradle" ] && { echo "❌ 缺少 app/build.gradle"; exit 1; }
           [ ! -f "./app/src/main/AndroidManifest.xml" ] && { echo "❌ 标准路径缺少 AndroidManifest.xml"; exit 1; }
-          # 保留其他文件的检查（如果需要）
-          [ -f "./anzhuoshifangyingwenjian/letta_lite_main.xml" ] && echo "✅ 自定义目录其他文件存在" || echo "⚠️ 自定义目录布局文件缺失（非必需）"
-          echo "✅ 核心构建文件齐全"
+          [ ! -f "${{ env.RUST_OUTPUT_DIR }}/lib${{ env.CORE_PACKAGE_NAME }}.so" ] && { echo "❌ Rust 核心产物缺失"; exit 1; }
+          echo "✅ 所有核心文件（含 Rust 产物）齐全"
 
       - name: 设置 JDK 17
         uses: actions/setup-java@v4
@@ -44,17 +157,15 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: 同步自定义目录的其他文件（仅保留非 Manifest 文件）
+      - name: 同步自定义目录的其他文件
         run: |
-          # 仅同步布局、资源等其他文件（排除 AndroidManifest.xml）
           CUSTOM_DIR="anzhuoshifangyingwenjian"
           DEST_LAYOUT="app/src/main/res/layout"
           mkdir -p "$DEST_LAYOUT"
-          # 复制除 Manifest 外的所有文件（可根据需要调整通配符）
           cp -f "$CUSTOM_DIR"/*.xml "$DEST_LAYOUT/" 2>/dev/null || echo "⚠️ 自定义目录无额外 XML 文件可同步"
           echo "✅ 自定义目录其他文件同步完成"
 
-      - name: 编译 Release 版本 APK（标准 app 模块）
+      - name: 编译 Release 版本 APK（自动包含 Rust .so 产物）
         run: |
           if [ -f "./gradlew" ]; then
               chmod +x ./gradlew
@@ -64,7 +175,7 @@ jobs:
               gradle clean :app:assembleRelease --no-daemon --info --stacktrace
           fi
 
-      - name: 上传 APK 产物
+      - name: 上传 APK 产物（含 Rust 核心）
         uses: actions/upload-artifact@v4
         with:
           name: letta-lite-android-apk
