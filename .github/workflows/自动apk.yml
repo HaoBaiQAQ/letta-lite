@@ -170,20 +170,20 @@ jobs:
           cp -f "$CUSTOM_DIR"/*.xml "$DEST_LAYOUT/" 2>/dev/null || echo "⚠️ 自定义目录无额外 XML 文件"
           echo "✅ 自定义文件同步完成"
 
-      - name: 编译 Release APK
+      - name: 编译 Debug APK（自动签名，可直接安装）
         run: |
           if [ -f "./gradlew" ]; then
               chmod +x ./gradlew
-              ./gradlew clean :app:assembleRelease --no-daemon --info --stacktrace
+              ./gradlew clean :app:assembleDebug --no-daemon --info --stacktrace
           else
               echo "⚠️ 使用全局 Gradle"
-              gradle clean :app:assembleRelease --no-daemon --info --stacktrace
+              gradle clean :app:assembleDebug --no-daemon --info --stacktrace
           fi
 
-      - name: 上传 APK 产物
+      - name: 上传 Debug APK 产物（可直接安装）
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-apk
-          path: "app/build/outputs/apk/release/*.apk"
+          name: letta-lite-android-apk-debug
+          path: "app/build/outputs/apk/debug/*.apk"
           retention-days: 30
           if-no-files-found: error
