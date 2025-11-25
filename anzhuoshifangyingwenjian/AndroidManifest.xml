@@ -1,58 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.letta.lite.mobile"> <!-- 可根据项目实际包名修改 -->
 
-    <TextView
-        android:id="@+id/resultView"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:hint="等待Lettalite回复..."
-        android:textSize="16sp" />
+    <!-- 基础权限声明（根据项目需求添加，如网络、存储等） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
-    <EditText
-        android:id="@+id/inputEdit"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="输入指令..."
-        android:layout_marginBottom="8dp" />
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher" <!-- 可替换为项目图标 -->
+        android:label="Letta Lite"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.LettaLite" <!-- 需确保主题存在，无则替换为 @android:style/Theme.Material.Light -->
+        android:hardwareAccelerated="true">
 
-    <Button
-        android:id="@+id/sendBtn"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="发送"
-        android:background="#2196F3"
-        android:textColor="@android:color/white" />
+        <!-- 主Activity声明（与布局文件关联） -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <<intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </</intent-filter>
+        </activity>
 
-    <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="8dp">
+        <!-- 可选：添加其他组件（Service、Receiver等） -->
+    </application>
 
-        <Button
-            android:id="@+id/allowBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="允许工具调用"
-            android:background="#4CAF50"
-            android:textColor="@android:color/white"
-            android:layout_marginRight="8dp"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/denyBtn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="拒绝工具调用"
-            android:background="#F44336"
-            android:textColor="@android:color/white"
-            android:visibility="gone" />
-
-    </LinearLayout>
-
-</LinearLayout>
+</manifest>
