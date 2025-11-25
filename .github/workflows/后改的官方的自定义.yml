@@ -24,13 +24,16 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      # ===================== 新增：编译前提取并打印完整API信息 =====================
-      - name: 安装API提取工具
+      # ===================== 修复：编译前提取并打印完整API信息 =====================
+      - name: 安装API提取工具（仅安装jq，rustdoc默认已存在）
         run: |
-          # 安装rustdoc（Rust官方工具，提取源码注释和类型）
-          rustup component add rustdoc
-          # 安装jq（格式化JSON输出）
+          # 无需安装rustdoc（Rust默认自带），仅安装jq用于格式化JSON
           sudo apt-get install -y jq
+          # 验证rustdoc是否可用
+          if ! command -v rustdoc &> /dev/null; then
+            echo "❌ rustdoc未找到，尝试重新安装Rust工具链"
+            rustup update stable
+          fi
           echo "✅ API提取工具安装完成"
 
       - name: 从Rust源码提取完整API信息（编译前）
@@ -52,7 +55,7 @@ jobs:
             select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
             {
               函数名: .name,
-              参数: (.inputs[] | {参数名: .name, 类型: .type.name}) | to_entries | map("\(.key):\(.value.参数名):\(.value.类型)") | join(", "),
+              参数: (.inputs[] | {参数名: .name, 类型: .type.name}) | to_entries | map("\(.value.参数名):\(.value.类型)") | join(", "),
               返回值类型: .output.type.name,
               函数说明: (.docs // "无说明文档"),
               暴露标记: if (.attrs[] | contains("extern \"C\"")) then "extern \"C\"" else "宏自动标记" end
