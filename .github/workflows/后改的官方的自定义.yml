@@ -24,81 +24,66 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
-      # ===================== 修复：编译前提取并打印完整API信息 =====================
-      - name: 安装API提取工具（仅安装jq，rustdoc默认已存在）
-        run: |
-          # 无需安装rustdoc（Rust默认自带），仅安装jq用于格式化JSON
-          sudo apt-get install -y jq
-          # 验证rustdoc是否可用
-          if ! command -v rustdoc &> /dev/null; then
-            echo "❌ rustdoc未找到，尝试重新安装Rust工具链"
-            rustup update stable
-          fi
-          echo "✅ API提取工具安装完成"
-
-      - name: 从Rust源码提取完整API信息（编译前）
+      # ===================== 修复：扫描源码提取外部API（仅能从.so调用的） =====================
+      - name: 提取能从.so调用的外部API（编译前）
         run: |
           cd ${{ env.CORE_DIR }}  # 进入core子包目录
           echo -e "\n========================================"
-          echo "📋 编译前：Rust源码暴露API完整信息"
+          echo "📋 编译前：能从.so调用的外部API（仅暴露这些）"
           echo "========================================"
+          echo "🔍 筛选规则：带 #[no_mangle] 或 extern \"C\" 标记的函数（外部可调用）"
 
-          # 1. 用rustdoc生成JSON格式的源码文档（包含所有函数、类型、注释）
-          rustdoc --document-private-items --output-format json src/lib.rs -o ./target/doc-json
-          DOC_JSON="./target/doc-json/lib.json"
+          # 1. 扫描所有Rust文件，提取带外部API标记的函数（含注释、签名）
+          # 逻辑：先找///注释，再找#[no_mangle]或extern "C"，再找函数签名
+          EXTERNAL_APIS=$(grep -rniH --null -A 3 -B 3 -E '#\[no_mangle\]|extern "C"' src/ | \
+            awk -v RS='\0' '{
+              # 提取文件名
+              match($0, /^([^:]+):/, fn);
+              # 提取///注释
+              if (match($0, /(/// .*\n)+/, docs)) {
+                gsub(/\/\/\/ /, "", docs[0]);
+                gsub(/\n+/, " ", docs[0]);
+              } else {
+                docs[0] = "无说明文档";
+              }
+              # 提取暴露标记（#[no_mangle] 或 extern "C"）
+              if (match($0, /#\[no_mangle\]/)) {
+                flag = "#[no_mangle]（宏自动标记）";
+              } else if (match($0, /extern "C"/)) {
+                flag = "extern \"C\"（手动标记）";
+              }
+              # 提取函数签名（fn 函数名(参数) -> 返回值）
+              if (match($0, /fn ([a-zA-Z_][a-zA-Z0-9_]*)\(([^)]*)\) -> ([^;]*);?/, sig)) {
+                func_name = sig[1];
+                params = sig[2];
+                ret_type = sig[3];
+                # 格式化参数（去掉多余空格）
+                gsub(/[ \t]+/, " ", params);
+                # 输出结果
+                printf "🔍 函数名：%s\n   所在文件：%s\n   参数：%s\n   返回值：%s\n   说明：%s\n   暴露标记：%s\n\n",
+                  func_name, fn[1], params, ret_type, docs[0], flag;
+              }
+            }')
 
-          # 2. 解析JSON，提取所有标记为「暴露（extern "C" 或 宏标记）」的函数
-          echo -e "\n【1. 已标记暴露的API（含详细信息）】"
-          # 筛选规则：函数带#[no_mangle]属性（宏自动添加）或 extern "C" 声明
-          jq -r '
-            .index[] | 
-            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
-            {
-              函数名: .name,
-              参数: (.inputs[] | {参数名: .name, 类型: .type.name}) | to_entries | map("\(.value.参数名):\(.value.类型)") | join(", "),
-              返回值类型: .output.type.name,
-              函数说明: (.docs // "无说明文档"),
-              暴露标记: if (.attrs[] | contains("extern \"C\"")) then "extern \"C\"" else "宏自动标记" end
-            } |
-            "🔍 函数名：\(.函数名)\n   参数：\(.参数 // "无参数")\n   返回值：\(.返回值类型)\n   说明：\(.函数说明)\n   暴露方式：\(.暴露标记)\n"
-          ' $DOC_JSON
-
-          # 3. 提取所有公开函数（pub），提醒未标记暴露的函数
-          echo -e "\n【2. 未标记暴露的公开函数（需手动标记才会写入.so）】"
-          UNEXPORTED=$(jq -r '
-            .index[] | 
-            select(.kind == "function" and .visibility == "public" and (.attrs[] | contains("no_mangle") | not) and (.attrs[] | contains("extern \"C\"") | not)) |
-            .name
-          ' $DOC_JSON)
-          if [ -z "$UNEXPORTED" ]; then
-            echo "✅ 所有公开函数均已标记暴露，无遗漏！"
+          # 2. 输出外部API列表
+          if [ -z "$EXTERNAL_APIS" ]; then
+            echo -e "\n⚠️  未找到任何外部API！请检查："
+            echo "   - 是否用 export_letta_api!() 宏标记了要暴露的函数？"
+            echo "   - 函数是否带 #[no_mangle] 或 extern \"C\" 标记？"
           else
-            echo "⚠️  以下函数是公开函数，但未标记暴露（不会写入.so）："
-            echo "$UNEXPORTED" | while read -r func; do
-              echo "  - $func"
-            done
-            echo "💡 提示：用 export_letta_api!() 宏标记这些函数，即可暴露到.so中"
+            echo -e "\n【已标记的外部API（共$(echo "$EXTERNAL_APIS" | grep -c "🔍 函数名：")个）】"
+            echo "$EXTERNAL_APIS"
           fi
 
-          # 4. 统计信息
-          EXPORTED_COUNT=$(jq -r '
-            .index[] | 
-            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
-            .name
-          ' $DOC_JSON | wc -l)
-          PUB_COUNT=$(jq -r '
-            .index[] | 
-            select(.kind == "function" and .visibility == "public") |
-            .name
-          ' $DOC_JSON | wc -l)
-          echo -e "\n【3. 统计信息】"
-          echo "公开函数总数：$PUB_COUNT 个"
-          echo "已标记暴露的函数数：$EXPORTED_COUNT 个"
+          # 3. 统计信息
+          TOTAL_EXTERNAL=$(echo "$EXTERNAL_APIS" | grep -c "🔍 函数名：")
+          echo -e "\n【统计信息】"
+          echo "能从.so调用的外部API总数：$TOTAL_EXTERNAL 个"
           echo -e "\n========================================"
-          echo "📝 说明："
-          echo "1. 只有「已标记暴露」的函数会被编译到.so中，对外可调用；"
-          echo "2. 函数说明来自Rust源码中的///注释（例：/// 处理用户输入）；"
-          echo "3. 参数/返回值类型为精确Rust类型，编译为.so后会映射为C兼容类型（如String→*mut c_char）。"
+          echo "📝 关键说明："
+          echo "1. 只有以上函数会被编译到.so中，外部程序（Android/Godot）能直接调用；"
+          echo "2. 参数/返回值必须是C兼容类型（如*const c_char、c_int），否则调用失败；"
+          echo "3. 若未找到API，检查core/src/lib.rs中是否用 export_letta_api!() 标记了函数。"
           echo "========================================"
 
       # ===================== 原有步骤不变 =====================
@@ -106,131 +91,4 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
-
-      - name: 验证NDK
-        run: |
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK"
-            exit 1
-          fi
-          export ANDROID_NDK_ROOT=$NDK_PATH
-          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "❌ 编译器缺失"
-            exit 1
-          fi
-          echo "✅ NDK验证通过"
-
-      - name: 下载并编译OpenSSL
-        run: |
-          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
-          cd ${{ env.OPENSSL_SRC_DIR }}
-          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
-          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
-          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
-          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          ./Configure linux-aarch64 no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-          make -j$(nproc) V=1
-          make install_sw && echo "✅ OpenSSL编译完成"
-
-      - name: 配置Rust环境
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          target: ${{ env.TARGET_ARCH }}
-
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version=3.5.4 --locked
-
-      - name: 修复工作区配置
-        run: |
-          # 清理根目录无效配置
-          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
-          echo "✅ 已清理根目录Cargo.toml"
-
-          # 验证子包路径
-          CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
-          if [ ! -f "$CORE_CARGO" ]; then
-            echo "❌ 子包目录不存在"
-            ls -l */Cargo.toml
-            exit 1
-          fi
-
-          # 添加cdylib配置（生成.so核心）
-          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
-            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
-            echo "✅ 已添加cdylib配置"
-          fi
-          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
-
-      - name: 编译核心子包（改用 --profile mobile）
-        run: |
-          cargo clean
-          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
-          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
-          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export PKG_CONFIG_ALLOW_CROSS=1
-          # 关键修改：把 --release 换成 --profile mobile
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build \
-            --package ${{ env.CORE_PACKAGE_NAME }} \
-            --profile mobile
-          echo "✅ 编译完成，产物目录："
-          ls -l ${{ env.OUTPUT_DIR }}
-          # 兜底收集所有.so文件，避免路径问题
-          find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
-          echo "✅ 最终产物列表："
-          ls -l ${{ env.OUTPUT_DIR }}
-
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: lettalite-android-so-mobile
-          path: ${{ env.OUTPUT_DIR }}/*.so
-          retention-days: 14
-
-      # （可选）编译后验证.so导出函数（和编译前对比，确认一致）
-      - name: 编译后验证.so导出函数（对比源码）
-        run: |
-          cd ${{ env.OUTPUT_DIR }}
-          SO_FILE=$(ls -1 lib*.so | head -n 1)
-          if [ -z "$SO_FILE" ]; then
-            echo "❌ 未找到.so文件"
-            exit 1
-          fi
-          echo -e "\n========================================"
-          echo "🔍 编译后：.so实际导出函数（与源码对比）"
-          echo "========================================"
-          # 提取.so导出函数名
-          SO_FUNCS=$(nm -D $SO_FILE | grep "T " | grep -v "__" | awk '{print $3}')
-          # 提取源码中标记暴露的函数名
-          SRC_FUNCS=$(cd ${{ env.CORE_DIR }} && jq -r '
-            .index[] | 
-            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
-            .name
-          ' ./target/doc-json/lib.json)
-          # 对比
-          echo "源码标记暴露的函数："
-          echo "$SRC_FUNCS"
-          echo -e "\n.so实际导出的函数："
-          echo "$SO_FUNCS"
-          # 检查是否一致
-          DIFF=$(comm -3 <(echo "$SRC_FUNCS" | sort) <(echo "$SO_FUNCS" | sort))
-          if [ -z "$DIFF" ]; then
-            echo -e "\n✅ 一致：.so导出函数与源码标记完全匹配！"
-          else
-            echo -e "\n⚠️  不一致：以下函数未正确导出或多余导出："
-            echo "$DIFF"
-          fi
+        
