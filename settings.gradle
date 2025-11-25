@@ -1,17 +1,24 @@
-// ########## 新增：插件仓库配置（必须，否则找不到 Android 插件）##########
+// ########## 插件仓库配置（之前已配置，用于下载 Android 插件）##########
 pluginManagement {
     repositories {
-        google() // Google 插件仓库（Android 插件在这里）
-        mavenCentral() // 中央仓库（依赖库在这里）
-        gradlePluginPortal() // Gradle 官方插件仓库
+        google()
+        mavenCentral()
+        gradlePluginPortal()
     }
-    // 声明 Android 插件版本（统一管理，避免冲突）
     plugins {
         id 'com.android.application' version '8.4.0' apply false
-        // 如果你用 Kotlin，添加：id 'org.jetbrains.kotlin.android' version '1.9.23' apply false
     }
 }
 
-// ########## 原有配置保留 ##########
+// ########## 新增：依赖库仓库配置（用于下载 appcompat、material 等依赖）##########
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google() // 谷歌依赖库（如 appcompat、material）
+        mavenCentral() // 中央仓库（其他第三方依赖）
+    }
+}
+
+// ########## 原有项目结构配置 ##########
 rootProject.name = "LettaLite"
 include ":app"
