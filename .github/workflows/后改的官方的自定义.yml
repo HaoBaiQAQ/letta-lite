@@ -24,6 +24,81 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev
 
+      # ===================== 新增：编译前提取并打印完整API信息 =====================
+      - name: 安装API提取工具
+        run: |
+          # 安装rustdoc（Rust官方工具，提取源码注释和类型）
+          rustup component add rustdoc
+          # 安装jq（格式化JSON输出）
+          sudo apt-get install -y jq
+          echo "✅ API提取工具安装完成"
+
+      - name: 从Rust源码提取完整API信息（编译前）
+        run: |
+          cd ${{ env.CORE_DIR }}  # 进入core子包目录
+          echo -e "\n========================================"
+          echo "📋 编译前：Rust源码暴露API完整信息"
+          echo "========================================"
+
+          # 1. 用rustdoc生成JSON格式的源码文档（包含所有函数、类型、注释）
+          rustdoc --document-private-items --output-format json src/lib.rs -o ./target/doc-json
+          DOC_JSON="./target/doc-json/lib.json"
+
+          # 2. 解析JSON，提取所有标记为「暴露（extern "C" 或 宏标记）」的函数
+          echo -e "\n【1. 已标记暴露的API（含详细信息）】"
+          # 筛选规则：函数带#[no_mangle]属性（宏自动添加）或 extern "C" 声明
+          jq -r '
+            .index[] | 
+            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
+            {
+              函数名: .name,
+              参数: (.inputs[] | {参数名: .name, 类型: .type.name}) | to_entries | map("\(.key):\(.value.参数名):\(.value.类型)") | join(", "),
+              返回值类型: .output.type.name,
+              函数说明: (.docs // "无说明文档"),
+              暴露标记: if (.attrs[] | contains("extern \"C\"")) then "extern \"C\"" else "宏自动标记" end
+            } |
+            "🔍 函数名：\(.函数名)\n   参数：\(.参数 // "无参数")\n   返回值：\(.返回值类型)\n   说明：\(.函数说明)\n   暴露方式：\(.暴露标记)\n"
+          ' $DOC_JSON
+
+          # 3. 提取所有公开函数（pub），提醒未标记暴露的函数
+          echo -e "\n【2. 未标记暴露的公开函数（需手动标记才会写入.so）】"
+          UNEXPORTED=$(jq -r '
+            .index[] | 
+            select(.kind == "function" and .visibility == "public" and (.attrs[] | contains("no_mangle") | not) and (.attrs[] | contains("extern \"C\"") | not)) |
+            .name
+          ' $DOC_JSON)
+          if [ -z "$UNEXPORTED" ]; then
+            echo "✅ 所有公开函数均已标记暴露，无遗漏！"
+          else
+            echo "⚠️  以下函数是公开函数，但未标记暴露（不会写入.so）："
+            echo "$UNEXPORTED" | while read -r func; do
+              echo "  - $func"
+            done
+            echo "💡 提示：用 export_letta_api!() 宏标记这些函数，即可暴露到.so中"
+          fi
+
+          # 4. 统计信息
+          EXPORTED_COUNT=$(jq -r '
+            .index[] | 
+            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
+            .name
+          ' $DOC_JSON | wc -l)
+          PUB_COUNT=$(jq -r '
+            .index[] | 
+            select(.kind == "function" and .visibility == "public") |
+            .name
+          ' $DOC_JSON | wc -l)
+          echo -e "\n【3. 统计信息】"
+          echo "公开函数总数：$PUB_COUNT 个"
+          echo "已标记暴露的函数数：$EXPORTED_COUNT 个"
+          echo -e "\n========================================"
+          echo "📝 说明："
+          echo "1. 只有「已标记暴露」的函数会被编译到.so中，对外可调用；"
+          echo "2. 函数说明来自Rust源码中的///注释（例：/// 处理用户输入）；"
+          echo "3. 参数/返回值类型为精确Rust类型，编译为.so后会映射为C兼容类型（如String→*mut c_char）。"
+          echo "========================================"
+
+      # ===================== 原有步骤不变 =====================
       - name: 正确安装NDK（空格分隔包）
         uses: android-actions/setup-android@v3
         with:
@@ -119,6 +194,40 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-so-mobile
+          name: lettalite-android-so-mobile
           path: ${{ env.OUTPUT_DIR }}/*.so
           retention-days: 14
+
+      # （可选）编译后验证.so导出函数（和编译前对比，确认一致）
+      - name: 编译后验证.so导出函数（对比源码）
+        run: |
+          cd ${{ env.OUTPUT_DIR }}
+          SO_FILE=$(ls -1 lib*.so | head -n 1)
+          if [ -z "$SO_FILE" ]; then
+            echo "❌ 未找到.so文件"
+            exit 1
+          fi
+          echo -e "\n========================================"
+          echo "🔍 编译后：.so实际导出函数（与源码对比）"
+          echo "========================================"
+          # 提取.so导出函数名
+          SO_FUNCS=$(nm -D $SO_FILE | grep "T " | grep -v "__" | awk '{print $3}')
+          # 提取源码中标记暴露的函数名
+          SRC_FUNCS=$(cd ${{ env.CORE_DIR }} && jq -r '
+            .index[] | 
+            select(.kind == "function" and (.attrs[] | contains("no_mangle") or contains("extern \"C\""))) |
+            .name
+          ' ./target/doc-json/lib.json)
+          # 对比
+          echo "源码标记暴露的函数："
+          echo "$SRC_FUNCS"
+          echo -e "\n.so实际导出的函数："
+          echo "$SO_FUNCS"
+          # 检查是否一致
+          DIFF=$(comm -3 <(echo "$SRC_FUNCS" | sort) <(echo "$SO_FUNCS" | sort))
+          if [ -z "$DIFF" ]; then
+            echo -e "\n✅ 一致：.so导出函数与源码标记完全匹配！"
+          else
+            echo -e "\n⚠️  不一致：以下函数未正确导出或多余导出："
+            echo "$DIFF"
+          fi
