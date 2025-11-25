@@ -1,0 +1,5 @@
+// 项目名称（可自定义，比如 "LettaLiteMobile"）
+rootProject.name = "LettaLite"
+
+// 声明项目包含的模块（必须有 app 模块，对应 app/ 文件夹）
+include ":app"
