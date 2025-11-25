@@ -1,32 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.letta.lite.mobile">
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
 
-    <!-- 必要权限 -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <TextView
+        android:id="@+id/resultView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:hint="等待Lettalite回复..."
+        android:textSize="16sp" />
 
-    <!-- 应用配置（已修复第12行语法错误） -->
-    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Letta Lite"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:hardwareAccelerated="true">
+    <EditText
+        android:id="@+id/inputEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="输入指令..."
+        android:layout_marginBottom="8dp" />
 
-        <!-- 启动 Activity（已修复 intent-filter 标签错误） -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:label="Letta Lite">
-            <<intent-filter>  <!-- 修正：去掉多余的 < -->
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </</intent-filter>  <!-- 修正：去掉多余的 / -->
-        </activity>
+    <Button
+        android:id="@+id/sendBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="发送"
+        android:background="#2196F3"
+        android:textColor="@android:color/white" />
 
-    </application>
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
 
-</manifest>
+        <Button
+            android:id="@+id/allowBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="允许工具调用"
+            android:background="#4CAF50"
+            android:textColor="@android:color/white"
+            android:layout_marginRight="8dp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/denyBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="拒绝工具调用"
+            android:background="#F44336"
+            android:textColor="@android:color/white"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</LinearLayout>
