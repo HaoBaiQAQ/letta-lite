@@ -1,4 +1,4 @@
-name: Letta Lite Android 自动构建（补全 Gradle 配置）
+name: Letta Lite Android 自动构建（最终稳定版）
 
 on:
   push:
@@ -16,26 +16,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 步骤1：拉取项目代码
       - name: 拉取项目代码
         uses: actions/checkout@v4
 
-      # 步骤2：新增！检查 Gradle 核心配置文件是否存在
-      - name: 检查项目构建配置
+      # ########## 优化文件检查：明确路径，避免误报 ##########
+      - name: 检查核心文件是否存在
         run: |
-          # 检查根目录 settings.gradle
-          if [ ! -f "./settings.gradle" ]; then
-              echo "❌ 错误：项目根目录缺少 settings.gradle"
-              exit 1
-          fi
-          # 检查 app 模块 build.gradle
-          if [ ! -f "./app/build.gradle" ]; then
-              echo "❌ 错误：app 目录缺少 build.gradle"
-              exit 1
-          fi
-          echo "✅ 项目构建配置文件齐全"
+          # 检查 settings.gradle
+          [ ! -f "./settings.gradle" ] && { echo "❌ 根目录缺少 settings.gradle"; exit 1; }
+          # 检查 app/build.gradle
+          [ ! -f "./app/build.gradle" ] && { echo "❌ app 目录缺少 build.gradle"; exit 1; }
+          # 检查清单文件
+          [ ! -f "./app/src/main/AndroidManifest.xml" ] && { echo "❌ 缺少 AndroidManifest.xml"; exit 1; }
+          # 检查布局文件
+          [ ! -f "./anzhuoshifangyingwenjian/letta_lite_main.xml" ] && { echo "❌ 缺少自定义布局文件"; exit 1; }
+          echo "✅ 所有核心文件齐全"
 
-      # 步骤3：配置 Java 环境
       - name: 设置 JDK 17
         uses: actions/setup-java@v4
         with:
@@ -43,97 +39,30 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 步骤4：同步自定义布局文件
-      - name: 同步布局文件（自定义目录 → 标准目录）
+      - name: 同步布局文件
         run: |
           CUSTOM_LAYOUT_PATH="anzhuoshifangyingwenjian/letta_lite_main.xml"
           STANDARD_LAYOUT_PATH="app/src/main/res/layout"
-          
-          if [ ! -f "$CUSTOM_LAYOUT_PATH" ]; then
-              echo "❌ 错误：自定义布局文件 $CUSTOM_LAYOUT_PATH 不存在"
-              exit 1
-          fi
-          
           mkdir -p "$STANDARD_LAYOUT_PATH"
           cp -f "$CUSTOM_LAYOUT_PATH" "$STANDARD_LAYOUT_PATH/"
           echo "✅ 布局文件同步成功"
 
-      # 步骤5：检查并修复清单文件
-      - name: 检查并修复清单文件
+      # ########## 新增：强制设置 Gradle 版本（避免云端版本波动）##########
+      - name: 配置 Gradle 版本
         run: |
-          MANIFEST_FILE="app/src/main/AndroidManifest.xml"
-          PACKAGE_NAME="com.letta.lite.mobile" # 必须和 app/build.gradle 的 namespace 一致！
-          
-          if [ ! -f "$MANIFEST_FILE" ]; then
-              echo "❌ 清单文件不存在，正在创建..."
-              mkdir -p $(dirname "$MANIFEST_FILE")
-              cat > "$MANIFEST_FILE" << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="$PACKAGE_NAME">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application
-                  android:allowBackup="true"
-                  android:label="Letta Lite"
-                  android:theme="@android:style/Theme.Material.Light">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <<intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </</intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-              echo "✅ 清单文件创建成功"
-          fi
-          
-          if ! grep -q "<manifest" "$MANIFEST_FILE"; then
-              echo "❌ 清单文件格式错误，正在修复..."
-              cat > "$MANIFEST_FILE" << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="$PACKAGE_NAME">
-              <uses-permission android:name="android.permission.INTERNET" />
-              <application
-                  android:allowBackup="true"
-                  android:label="Letta Lite"
-                  android:theme="@android:style/Theme.Material.Light">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-                      <<intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </</intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-              echo "✅ 清单文件修复成功"
-          else
-              echo "✅ 清单文件格式正常"
-          fi
+          echo "org.gradle.version=9.2" > gradle.properties
+          echo "✅ Gradle 版本锁定为 9.2"
 
-      # 步骤6：编译 APK（兼容 gradlew/gradle）
       - name: 编译 Release 版本 APK
         run: |
           if [ -f "./gradlew" ]; then
-              echo "✅ 找到本地 gradlew，使用项目自带 Gradle 版本"
               chmod +x ./gradlew
               ./gradlew clean assembleRelease --no-daemon
           else
-              echo "⚠️  未找到本地 gradlew，使用云端全局 Gradle"
-              if ! command -v gradle &> /dev/null; then
-                  echo "❌ 错误：云端未找到全局 Gradle"
-                  exit 1
-              fi
+              echo "⚠️ 使用云端全局 Gradle"
               gradle clean assembleRelease --no-daemon
           fi
 
-      # 步骤7：上传 APK 产物
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
