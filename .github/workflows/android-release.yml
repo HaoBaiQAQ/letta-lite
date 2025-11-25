@@ -14,53 +14,97 @@ jobs:
         with:
           submodules: true  # 拉取子模块（避免官方脚本依赖缺失）
 
-      - name: 安装官方依赖
+      - name: 安装基础依赖（不含NDK，用action单独安装）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo openjdk-17-jdk android-sdk-platform-tools \
-            android-ndk-23  # 官方要求NDK 23+，这里安装兼容版本
-          # 配置NDK路径
-          echo "ANDROID_NDK_ROOT=/usr/lib/android-ndk-23" >> $GITHUB_ENV
-          echo "PATH=$PATH:$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+            coreutils pkg-config make perl wget curl gcc cmake \
+            libssl-dev zlib1g-dev  # 补充编译所需基础工具
+
+      - name: 正确安装NDK（使用android-actions，避免apt包名错误）
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          # 安装NDK 23.2.8568313（官方要求23+，选择稳定版本）+ 对应API平台
+          packages: "ndk;23.2.8568313 platforms;android-24"
+
+      - name: 验证NDK并配置环境变量
+        run: |
+          # 查找NDK安装路径
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep "23.2.8568313")
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ 未找到NDK 23.2.8568313"
+            exit 1
+          fi
+          # 配置NDK环境变量（传递给官方编译脚本）
+          export ANDROID_NDK_ROOT=$NDK_PATH
+          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "PATH=$PATH:$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          # 验证编译器存在
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/aarch64-linux-android24-clang" ]; then
+            echo "❌ 编译器缺失"
+            exit 1
+          fi
+          echo "✅ NDK验证通过，路径：$ANDROID_NDK_ROOT"
 
       - name: 调用官方脚本编译Android产物
         run: |
           # 给官方脚本执行权限
           chmod +x ./scripts/build-android.sh
-          # 运行官方编译脚本（会生成.so和Kotlin绑定库）
-          ./scripts/build-android.sh
-          # 查看产物目录（官方脚本默认输出到 bindings/android/ 或 target/）
-          echo "产物目录结构："
-          ls -l bindings/android/  # Kotlin绑定库（.aar文件）
-          ls -l target/aarch64-linux-android/mobile/  # .so文件
+          # 传递NDK路径给官方脚本，确保编译时使用正确的NDK
+          ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }} ./scripts/build-android.sh
+          # 查看产物目录（官方脚本默认输出路径）
+          echo "=== 产物目录结构 ==="
+          ls -l ./bindings/android/  # Kotlin绑定库（.aar文件）
+          ls -l ./target/aarch64-linux-android/mobile/  # .so文件（mobile profile）
+          ls -l ./target/aarch64-linux-android/release/  # .so文件（release profile）
 
-      - name: 准备发布产物
+      - name: 准备发布产物（兼容官方脚本可能的输出路径）
         run: |
-          # 创建产物目录，统一存放要上传的文件
+          # 创建统一产物目录
           mkdir -p release-artifacts
-          # 复制.so文件（Android arm64-v8a架构）
-          cp target/aarch64-linux-android/mobile/libletta_lite.so release-artifacts/
-          # 复制Kotlin绑定库（.aar文件，官方脚本编译后生成）
-          cp bindings/android/letta-lite-android.aar release-artifacts/
-          # 复制官方使用文档（方便用户查看）
+          # 复制.so文件（优先mobile profile，不存在则用release）
+          if [ -f ./target/aarch64-linux-android/mobile/libletta_lite.so ]; then
+            cp ./target/aarch64-linux-android/mobile/libletta_lite.so release-artifacts/
+          elif [ -f ./target/aarch64-linux-android/release/libletta_lite.so ]; then
+            cp ./target/aarch64-linux-android/release/libletta_lite.so release-artifacts/
+          else
+            echo "❌ 未找到libletta_lite.so"
+            exit 1
+          fi
+          # 复制Kotlin绑定库（.aar文件）
+          if [ -f ./bindings/android/letta-lite-android.aar ]; then
+            cp ./bindings/android/letta-lite-android.aar release-artifacts/
+          else
+            echo "⚠️  未找到Kotlin绑定库.aar文件，仅上传.so"
+          fi
+          # 复制官方文档
           cp README.md release-artifacts/
-          # 查看准备好的产物
+          # 查看最终产物
+          echo "=== 待发布产物列表 ==="
           ls -l release-artifacts/
 
       - name: 自动创建GitHub Release并上传产物
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}  # 用触发的标签作为Release版本号
+          tag_name: ${{ github.ref_name }}  # 用标签作为版本号
           release_name: "Android 版本 ${{ github.ref_name }}"  # Release名称
           body: |
             ## Letta-Lite Android 自动构建版本
-            - 产物包含：libletta_lite.so（arm64-v8a） + letta-lite-android.aar（Kotlin绑定库）
-            - 集成方式：参考README.md或下方快速开始
-            - 核心功能：对话、记忆管理、本地LLM、云同步
-            - 依赖：Android NDK 23+、minSdkVersion 24+
+            - 构建方式：调用官方 `scripts/build-android.sh` 脚本
+            - 产物包含：
+              - libletta_lite.so（arm64-v8a架构，兼容Android 24+）
+              - 可选：letta-lite-android.aar（Kotlin绑定库，直接集成调用）
+            - 核心功能：对话交互、记忆管理、本地LLM支持、云同步
+            - 依赖要求：
+              - Android NDK 23.2.8568313+
+              - 最小支持Android 7.0（API 24）
+              - 集成方式：参考README.md或官方文档
           files: |
             release-artifacts/libletta_lite.so
             release-artifacts/letta-lite-android.aar
             release-artifacts/README.md
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动提供的令牌，无需手动配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动提供，无需手动配置
