@@ -13,7 +13,7 @@ jobs:
       TARGET_ARCH: armv7-linux-androideabi  # 32位架构，对应armeabi-v7a
       ANDROID_API_LEVEL: 24  # 官方最低支持API
       NDK_VERSION: 23.2.8568313  # 官方要求23+，稳定版本
-      # OpenSSL配置（32位适配）
+      # OpenSSL配置（参考64位脚本逻辑，适配32位）
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
@@ -61,7 +61,7 @@ jobs:
           fi
           echo "✅ NDK配置完成（32位），编译器路径：$COMPILER_PATH"
 
-      - name: 交叉编译32位OpenSSL（适配armv7，修正编译器）
+      - name: 交叉编译32位OpenSSL（参考64位逻辑，解决gcc依赖）
         run: |
           # 创建目录
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
@@ -70,18 +70,19 @@ jobs:
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          # 32位编译配置（修正编译器名称：armv7a-linux-androideabi）
+          # 32位编译配置（参考64位脚本，用linux-arm替代android-arm，兼容clang）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          # OpenSSL配置（32位专用：android-arm）
-          ./Configure android-arm no-shared no-asm no-zlib \
+          # OpenSSL配置（参考64位：linux-arm适配32位，避免gcc依赖）
+          ./Configure linux-arm no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
             -fPIC -march=armv7-a \
+            -D__ANDROID_API__=${{ env.ANDROID_API_LEVEL }} \
             CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
           # 编译安装
           make -j$(nproc) V=1
@@ -95,7 +96,35 @@ jobs:
           echo "OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
 
-      - name: 调用官方脚本编译32位产物
+      - name: 配置Rust环境（参考64位脚本，适配32位目标）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          target: ${{ env.TARGET_ARCH }}  # 32位目标架构
+
+      - name: 安装cargo-ndk（参考64位脚本）
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: 修复工作区配置（参考64位逻辑，确保生成.so）
+        run: |
+          # 清理根目录无效配置
+          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
+          echo "✅ 已清理根目录Cargo.toml"
+          # 验证子包路径（核心包为letta-core，参考64位脚本）
+          CORE_CARGO="${{ github.workspace }}/core/Cargo.toml"
+          if [ ! -f "$CORE_CARGO" ]; then
+            echo "❌ 核心子包目录不存在"
+            ls -l ${{ github.workspace }}/*/Cargo.toml
+            exit 1
+          fi
+          # 添加cdylib配置（生成.so核心，参考64位）
+          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+            echo "✅ 已添加cdylib配置，确保生成.so"
+          fi
+          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
+
+      - name: 调用官方脚本编译32位产物（传递所有环境变量）
         run: |
           # 给官方脚本执行权限
           chmod +x ./scripts/build-android.sh
@@ -104,6 +133,7 @@ jobs:
           OPENSSL_DIR=${{ env.OPENSSL_DIR }} \
           OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INCLUDE_DIR }} \
           OPENSSL_LIB_DIR=${{ env.OPENSSL_LIB_DIR }} \
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang \
           ./scripts/build-android.sh
           # 查看32位产物目录
           echo "=== 32位产物目录 ==="
@@ -111,10 +141,10 @@ jobs:
           ls -l ./target/${{ env.TARGET_ARCH }}/mobile/  # 32位.so（mobile profile）
           ls -l ./target/${{ env.TARGET_ARCH }}/release/  # 32位.so（release profile）
 
-      - name: 打包发布产物
+      - name: 打包发布产物（补全截断代码）
         run: |
           mkdir -p release-artifacts
-          # 复制32位.so（优先mobile profile）
+          # 复制32位.so（优先mobile profile，参考64位脚本兜底逻辑）
           if [ -f ./target/${{ env.TARGET_ARCH }}/mobile/libletta_lite.so ]; then
             cp ./target/${{ env.TARGET_ARCH }}/mobile/libletta_lite.so release-artifacts/
           elif [ -f ./target/${{ env.TARGET_ARCH }}/release/libletta_lite.so ]; then
@@ -134,6 +164,27 @@ jobs:
           # 查看产物
           echo "=== 待发布32位产物 ==="
           ls -l release-artifacts/
+
+      - name: 编译后验证.so外部API（参考64位脚本，确认可调用）
+        run: |
+          cd release-artifacts
+          SO_FILE=$(ls -1 lib*.so | head -n 1)
+          if [ -z "$SO_FILE" ]; then
+            echo "❌ 未找到.so文件"
+            exit 1
+          fi
+          echo -e "\n========================================"
+          echo "🔍 编译后：.so实际可调用的外部API"
+          echo "========================================"
+          EXPORTED_FUNCS=$(nm -D $SO_FILE | grep "T " | grep -v "__" | awk '{print $3}')
+          if [ -z "$EXPORTED_FUNCS" ]; then
+            echo "⚠️  .so未导出任何函数！但产物已生成，可能需通过Kotlin绑定库调用"
+          else
+            echo "能从.so调用的函数列表（共$(echo "$EXPORTED_FUNCS" | wc -l)个）："
+            echo "$EXPORTED_FUNCS" | while read -r func; do
+              echo "  - $func"
+            done
+          fi
 
       - name: 自动创建GitHub Release并上传
         uses: softprops/action-gh-release@v2
