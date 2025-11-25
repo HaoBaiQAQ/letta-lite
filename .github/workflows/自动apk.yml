@@ -1,4 +1,4 @@
-name: Letta Lite Android 自动构建（最终稳定版）
+name: Letta Lite Android 自动构建（自动补全目录+文件）
 
 on:
   push:
@@ -16,22 +16,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 步骤1：拉取项目代码
       - name: 拉取项目代码
         uses: actions/checkout@v4
 
-      # ########## 优化文件检查：明确路径，避免误报 ##########
-      - name: 检查核心文件是否存在
+      # 步骤2：自动补全 Android 核心目录结构（关键修复！）
+      - name: 自动创建缺失的目录和文件
         run: |
-          # 检查 settings.gradle
+          # 1. 创建 Android 核心目录：app/src/main/（存放清单文件、代码、资源）
+          mkdir -p app/src/main/java # Java/Kotlin 代码目录
+          mkdir -p app/src/main/res/layout # 布局文件目录（同步用）
+          
+          # 2. 自动生成 AndroidManifest.xml（放在正确路径 app/src/main/）
+          MANIFEST_FILE="app/src/main/AndroidManifest.xml"
+          PACKAGE_NAME="com.letta.lite.mobile" # 与 build.gradle 保持一致
+          
+          if [ ! -f "$MANIFEST_FILE" ]; then
+              echo "⚠️  未找到 AndroidManifest.xml，自动创建..."
+              cat > "$MANIFEST_FILE" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="$PACKAGE_NAME">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:label="Letta Lite"
+                  android:theme="@android:style/Theme.Material.Light">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <<intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </</intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+              echo "✅ AndroidManifest.xml 创建成功（路径：$MANIFEST_FILE）"
+          else
+              echo "✅ AndroidManifest.xml 已存在"
+          fi
+
+      # 步骤3：检查核心配置文件（确保 settings.gradle 和 app/build.gradle 存在）
+      - name: 检查核心配置文件
+        run: |
           [ ! -f "./settings.gradle" ] && { echo "❌ 根目录缺少 settings.gradle"; exit 1; }
-          # 检查 app/build.gradle
           [ ! -f "./app/build.gradle" ] && { echo "❌ app 目录缺少 build.gradle"; exit 1; }
-          # 检查清单文件
-          [ ! -f "./app/src/main/AndroidManifest.xml" ] && { echo "❌ 缺少 AndroidManifest.xml"; exit 1; }
-          # 检查布局文件
           [ ! -f "./anzhuoshifangyingwenjian/letta_lite_main.xml" ] && { echo "❌ 缺少自定义布局文件"; exit 1; }
           echo "✅ 所有核心文件齐全"
 
+      # 步骤4：配置 JDK 环境
       - name: 设置 JDK 17
         uses: actions/setup-java@v4
         with:
@@ -39,20 +74,21 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # 步骤5：同步自定义布局文件到标准路径
       - name: 同步布局文件
         run: |
           CUSTOM_LAYOUT_PATH="anzhuoshifangyingwenjian/letta_lite_main.xml"
           STANDARD_LAYOUT_PATH="app/src/main/res/layout"
-          mkdir -p "$STANDARD_LAYOUT_PATH"
           cp -f "$CUSTOM_LAYOUT_PATH" "$STANDARD_LAYOUT_PATH/"
-          echo "✅ 布局文件同步成功"
+          echo "✅ 布局文件同步成功：$CUSTOM_LAYOUT_PATH → $STANDARD_LAYOUT_PATH"
 
-      # ########## 新增：强制设置 Gradle 版本（避免云端版本波动）##########
+      # 步骤6：锁定 Gradle 版本，避免波动
       - name: 配置 Gradle 版本
         run: |
           echo "org.gradle.version=9.2" > gradle.properties
           echo "✅ Gradle 版本锁定为 9.2"
 
+      # 步骤7：执行编译（兼容 gradlew/gradle）
       - name: 编译 Release 版本 APK
         run: |
           if [ -f "./gradlew" ]; then
@@ -63,6 +99,7 @@ jobs:
               gradle clean assembleRelease --no-daemon
           fi
 
+      # 步骤8：上传 APK 产物
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
