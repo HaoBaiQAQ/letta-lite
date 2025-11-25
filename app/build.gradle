@@ -1,12 +1,10 @@
-// ########## 修改：引用 settings.gradle 中声明的插件版本 ##########
 plugins {
-    id 'com.android.application' // 不再写版本号，统一由 settings.gradle 管理
-    // 用 Kotlin 则添加：id 'org.jetbrains.kotlin.android'
+    id 'com.android.application'
 }
 
 android {
-    namespace "com.letta.lite.mobile" // 必须和 AndroidManifest.xml 的 package 一致
-    compileSdk 34 // 兼容 Gradle 8.4.0 + Android 插件 8.4.0
+    namespace "com.letta.lite.mobile" // 如需改包名，这里和清单文件、gradle.properties 同步
+    compileSdk 34
 
     defaultConfig {
         applicationId "com.letta.lite.mobile"
@@ -30,22 +28,16 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    // Kotlin 配置（可选）
-    // kotlinOptions {
-    //     jvmTarget = '17'
-    // }
-
     sourceSets {
         main {
             res.srcDirs = ['src/main/res']
             manifest.srcFile 'src/main/AndroidManifest.xml'
-            java.srcDirs = ['src/main/java'] // 无 Java 代码也保留，避免报错
+            java.srcDirs = ['src/main/java']
         }
     }
 }
 
 dependencies {
-    // 基础依赖（确保版本兼容）
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     testImplementation 'junit:junit:4.13.2'
