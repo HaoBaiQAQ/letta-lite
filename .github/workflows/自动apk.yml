@@ -1,205 +1,127 @@
-name: lettalite安卓APK编译（含Rust核心.so）
+name: Letta Lite Android 自动构建（无 .sh 版本）
+
+# 触发条件：提交代码到 main 分支 或 手动触发
 on:
-  workflow_dispatch:  # 无多余字段，兼容旧runner
+  push:
+    branches: [ main ]
+    paths: # 只在这些路径文件变更时触发，减少不必要构建
+      - 'app/**'
+      - 'anzhuoshifangyingwenjian/**'
+      - '.github/workflows/android-build.yml'
+  workflow_dispatch: # 允许在 GitHub 手动触发
 
 jobs:
-  build-android:
-    runs-on: ubuntu-latest
-    env:
-      # 换用旧插件兼容的NDK长期支持版（r25，官方稳定，100%可获取）
-      ANDROID_NDK_VERSION: 25.2.9519653
-      ANDROID_API_LEVEL: 24  # 保持Android 7.0+不变
-      TARGET_ARCH: aarch64-linux-android
-      OPENSSL_VERSION: 1.1.1w
-      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
-      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      OUTPUT_DIR: ${{ github.workspace }}/target/android
-      CORE_DIR: "core"
-      CORE_PACKAGE_NAME: "letta-core"
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      # 稳定的构建工具版本（兼容旧插件）
-      BUILD_TOOLS_VERSION: 30.0.3
-      # 你的文件存放目录
-      ASSETS_DIR: ${{ github.workspace }}/anzhuoshifangyingwenjian
-      LAYOUT_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/activity_main.xml
-      JAVA_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/MainActivity.java
-      MANIFEST_FILE: ${{ github.workspace }}/anzhuoshifangyingwenjian/AndroidManifest.xml
+  build:
+    runs-on: ubuntu-latest # 云端服务器环境（Ubuntu 最新版）
 
     steps:
-      - name: 拉取letta-lite源码
+      # 步骤1：拉取项目代码到云端服务器
+      - name: 拉取项目代码
         uses: actions/checkout@v4
 
-      - name: 验证所有文件存在
-        run: |
-          if [ ! -f "$LAYOUT_FILE" ]; then echo "❌ 未找到布局文件"; exit 1; fi
-          if [ ! -f "$JAVA_FILE" ]; then echo "❌ 未找到Java文件"; exit 1; fi
-          if [ ! -f "$MANIFEST_FILE" ]; then echo "❌ 未找到Manifest文件"; exit 1; fi
-          echo "✅ 文件验证通过"
-
-      - name: 安装基础依赖
-        run: |
-          sudo apt-get update && sudo apt-get install -y \
-            coreutils pkg-config make perl wget curl gcc cmake \
-            libssl-dev zlib1g-dev zip unzip openjdk-17-jdk \
-            libxml2-utils
-
-      - name: 安装Android SDK/NDK（修复参数+包名格式）
-        uses: android-actions/setup-android@v3
+      # 步骤2：配置 Java 环境（Android 构建必需）
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
         with:
-          accept-android-sdk-licenses: true
-          # 正确参数名：cmdline-tools-version（旧插件支持）
-          cmdline-tools-version: 9477386  # 兼容旧插件的稳定版本
-          # 包名格式修复：每个包单独一行，用短横线分隔，避免识别错误
-          packages: >-
-            ndk;${{ env.ANDROID_NDK_VERSION }}
-            platforms;android-${{ env.ANDROID_API_LEVEL }}
-            build-tools;${{ env.BUILD_TOOLS_VERSION }}
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle # 缓存 Gradle 依赖，加速后续构建
 
-      - name: 验证NDK和SDK工具（动态查找，容错性拉满）
+      # 步骤3：同步自定义布局文件到 Android 标准路径（核心步骤）
+      - name: 同步布局文件（自定义目录 → 标准目录）
         run: |
-          # 动态查找NDK（忽略版本号，找到第一个安装的NDK）
-          NDK_PATH=$(find $ANDROID_SDK_ROOT/ndk -maxdepth 1 -type d | grep -E '^.*/[0-9.]+$' | head -1)
-          if [ -z "$NDK_PATH" ]; then 
-            echo "❌ NDK安装失败，已安装的NDK目录："; ls -l $ANDROID_SDK_ROOT/ndk/; exit 1; 
-          fi
-          export ANDROID_NDK_ROOT=$NDK_PATH
-          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          # 配置路径（可根据实际需求调整）
+          CUSTOM_LAYOUT_PATH="anzhuoshifangyingwenjian/letta_lite_main.xml"
+          STANDARD_LAYOUT_PATH="app/src/main/res/layout"
           
-          # 验证NDK编译器（兼容r25版本的路径）
-          CLANG_PATH=$(find $NDK_TOOLCHAIN_BIN -name "${TARGET_ARCH}${{ env.ANDROID_API_LEVEL }}-clang" | head -1)
-          if [ -z "$CLANG_PATH" ]; then 
-            CLANG_PATH=$(find $NDK_TOOLCHAIN_BIN -name "${TARGET_ARCH}-clang" | head -1)  # 备选路径
-            if [ -z "$CLANG_PATH" ]; then
-              echo "❌ NDK编译器缺失，已有的编译器："; ls -l $NDK_TOOLCHAIN_BIN/*clang; exit 1;
-            fi
+          # 检查自定义布局文件是否存在
+          if [ ! -f "$CUSTOM_LAYOUT_PATH" ]; then
+              echo "❌ 错误：自定义布局文件 $CUSTOM_LAYOUT_PATH 不存在"
+              exit 1
           fi
-          echo "✅ NDK编译器找到：$CLANG_PATH"
+          
+          # 创建标准布局目录（若不存在）
+          mkdir -p "$STANDARD_LAYOUT_PATH"
+          
+          # 复制布局文件到标准路径（覆盖旧文件，确保同步最新版本）
+          cp -f "$CUSTOM_LAYOUT_PATH" "$STANDARD_LAYOUT_PATH/"
+          echo "✅ 布局文件同步成功：$CUSTOM_LAYOUT_PATH → $STANDARD_LAYOUT_PATH/letta_lite_main.xml"
 
-          # 动态查找构建工具（确保aapt、dx、apksigner存在）
-          AAPT_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name aapt -type f | head -1)
-          DX_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name dx -type f | head -1)
-          APKSIGNER_PATH=$(find $ANDROID_SDK_ROOT/build-tools -name apksigner -type f | head -1)
-          if [ -z "$AAPT_PATH" ] || [ -z "$DX_PATH" ] || [ -z "$APKSIGNER_PATH" ]; then
-            echo "❌ 构建工具缺失，已安装的build-tools："; ls -l $ANDROID_SDK_ROOT/build-tools/; exit 1; 
+      # 步骤4：检查并修复 AndroidManifest.xml（避免格式错误导致编译失败）
+      - name: 检查并修复清单文件
+        run: |
+          MANIFEST_FILE="app/src/main/AndroidManifest.xml"
+          PACKAGE_NAME="com.letta.lite.mobile" # 请根据你的项目实际包名修改
+          
+          # 检查清单文件是否存在，不存在则创建
+          if [ ! -f "$MANIFEST_FILE" ]; then
+              echo "❌ 清单文件不存在，正在创建标准版本..."
+              mkdir -p $(dirname "$MANIFEST_FILE")
+              cat > "$MANIFEST_FILE" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="$PACKAGE_NAME">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:label="Letta Lite"
+                  android:theme="@android:style/Theme.Material.Light">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <<intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </</intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+              echo "✅ 清单文件创建成功"
+              exit 0
           fi
-          BUILD_TOOLS_BIN=$(dirname "$AAPT_PATH")
-          echo "BUILD_TOOLS_BIN=$BUILD_TOOLS_BIN" >> $GITHUB_ENV
-          echo "✅ NDK和SDK工具验证通过"
-
-      - name: 下载并编译OpenSSL（兼容NDK r25）
-        run: |
-          mkdir -p $OPENSSL_SRC_DIR $OPENSSL_INSTALL_DIR
-          cd $OPENSSL_SRC_DIR
-          wget -q https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz
-          tar -xvzf openssl-$OPENSSL_VERSION.tar.gz --strip-components=1
-          # 使用NDK r25兼容的编译配置
-          export CC="$CLANG_PATH"
-          export CXX="${CC}++"
-          export AR="$NDK_TOOLCHAIN_BIN/llvm-ar"
-          export RANLIB="$NDK_TOOLCHAIN_BIN/llvm-ranlib"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          ./Configure linux-aarch64 no-shared no-asm no-zlib \
-            --prefix=$OPENSSL_INSTALL_DIR \
-            --sysroot=$NDK_SYSROOT \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB
-          make -j$(nproc) && make install_sw
-          echo "✅ OpenSSL编译完成"
-
-      - name: 配置Rust环境
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          target: ${{ env.TARGET_ARCH }}
-
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version=3.5.4 --locked
-
-      - name: 修复Rust工作区配置
-        run: |
-          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
-          CORE_CARGO="$CORE_DIR/Cargo.toml"
-          if [ ! -f "$CORE_CARGO" ]; then echo "❌ core子包不存在"; exit 1; fi
-          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
-            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+          
+          # 检查清单文件根标签是否为 <manifest>（修复原错误）
+          if ! grep -q "<manifest" "$MANIFEST_FILE"; then
+              echo "❌ 清单文件格式错误，正在修复..."
+              cat > "$MANIFEST_FILE" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="$PACKAGE_NAME">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:label="Letta Lite"
+                  android:theme="@android:style/Theme.Material.Light">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <<intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </</intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+              echo "✅ 清单文件修复成功"
+          else
+              echo "✅ 清单文件格式正常"
           fi
-          echo "✅ Rust工作区配置完成"
 
-      - name: 编译Rust核心库（兼容NDK r25）
+      # 步骤5：执行 Gradle 编译（生成 Release 版 APK）
+      - name: 编译 Release 版本 APK
         run: |
-          cargo clean
-          export OPENSSL_INCLUDE_DIR=$OPENSSL_INSTALL_DIR/include
-          export OPENSSL_LIB_DIR=$OPENSSL_INSTALL_DIR/lib
-          export OPENSSL_DIR=$OPENSSL_INSTALL_DIR
-          export PKG_CONFIG_ALLOW_CROSS=1
-          # 适配NDK r25的编译参数
-          cargo ndk -t $TARGET_ARCH -o $OUTPUT_DIR build \
-            --package $CORE_PACKAGE_NAME \
-            --profile mobile
-          find target -name "lib*.so" -exec cp {} $OUTPUT_DIR/ \;
-          echo "✅ Rust核心.so库编译完成"
-          ls -l $OUTPUT_DIR
+          # 赋予 gradlew 执行权限（云端默认可能无权限）
+          chmod +x ./gradlew
+          # 执行清理+编译，--no-daemon 避免后台进程占用资源
+          ./gradlew clean assembleRelease --no-daemon
 
-      - name: 创建临时Android项目并复制文件
-        run: |
-          mkdir -p temp-android/src/main/{java/com/letta/app,res/layout,jniLibs/arm64-v8a}
-          cp $LAYOUT_FILE temp-android/src/main/res/layout/
-          cp $JAVA_FILE temp-android/src/main/java/com/letta/app/
-          cp $MANIFEST_FILE temp-android/src/main/
-          cp $OUTPUT_DIR/lib*.so temp-android/src/main/jniLibs/arm64-v8a/
-          echo "✅ 所有文件复制完成"
-
-      - name: 编译打包APK
-        working-directory: ./temp-android
-        run: |
-          set -e
-          BUILD_TOOLS_BIN="${{ env.BUILD_TOOLS_BIN }}"
-          ANDROID_SDK_ROOT="${{ env.ANDROID_SDK_ROOT }}"
-          OUTPUT_APK="app-debug.apk"
-          TEMP_DIR="build-temp"
-          mkdir -p $TEMP_DIR/{classes,resources,dex,jniLibs,gen}
-
-          # 1. 打包资源
-          $BUILD_TOOLS_BIN/aapt package -f -m -J $TEMP_DIR/gen -M src/main/AndroidManifest.xml \
-            -S src/main/res -I "$ANDROID_SDK_ROOT/platforms/android-$ANDROID_API_LEVEL/android.jar" \
-            -F $TEMP_DIR/resources.ap_
-
-          # 2. 复制R.java
-          cp $TEMP_DIR/gen/com/letta/app/R.java src/main/java/com/letta/app/
-
-          # 3. 编译Java代码
-          javac -source 1.8 -target 1.8 \
-            -bootclasspath "$ANDROID_SDK_ROOT/platforms/android-$ANDROID_API_LEVEL/android.jar" \
-            -d $TEMP_DIR/classes \
-            src/main/java/com/letta/app/*.java
-
-          # 4. 生成Dex文件
-          $BUILD_TOOLS_BIN/dx --dex --output=$TEMP_DIR/dex/classes.dex $TEMP_DIR/classes
-
-          # 5. 复制.so库
-          cp -r src/main/jniLibs/arm64-v8a $TEMP_DIR/jniLibs/
-
-          # 6. 打包未签名APK
-          cd $TEMP_DIR && zip -r ../unsigned.apk dex resources.ap_ jniLibs && cd ..
-
-          # 7. 生成调试密钥并签名
-          keytool -genkeypair -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
-            -keystore debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048
-          $BUILD_TOOLS_BIN/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
-            --out $OUTPUT_APK unsigned.apk
-
-          # 8. 对齐APK
-          $BUILD_TOOLS_BIN/zipalign -f 4 $OUTPUT_APK $OUTPUT_APK.aligned
-          mv $OUTPUT_APK.aligned $OUTPUT_APK
-          echo "🎉 APK编译完成！"
-          ls -l $OUTPUT_APK
-
-      - name: 上传最终APK
+      # 步骤6：上传编译好的 APK 作为构建产物（方便下载）
+      - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
-          name: lettalite-安卓APK（Android7.0+）
-          path: temp-android/app-debug.apk
-          retention-days: 30
+          name: letta-lite-android-apk # 产物名称（下载时显示）
+          path: app/build/outputs/apk/release/*.apk # APK 输出路径（匹配所有 Release 版 APK）
+          retention-days: 30 # 产物保留 30 天（可按需调整，如 7/90 天）
+          if-no-files-found: error # 若未找到 APK，标记构建失败
