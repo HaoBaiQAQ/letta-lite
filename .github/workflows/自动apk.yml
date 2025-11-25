@@ -9,7 +9,7 @@ on:
       - 'settings.gradle'
       - 'gradle.properties'
       - 'app/build.gradle'
-      - '.github/workflows/android-build.yml'
+      - '.github/workflows/自动apk.yml'
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
       OPENSSL_INSTALL_DIR: "${{ github.workspace }}/openssl-install"
       RUST_OUTPUT_DIR: "${{ github.workspace }}/app/src/main/jniLibs/arm64-v8a"
       CORE_DIR: "core"
-      CORE_PACKAGE_NAME: "letta-core"
+      CORE_PACKAGE_NAME: "letta-core"  # 保持原包名（连字符）
 
     steps:
       - name: 拉取项目代码
@@ -109,6 +109,10 @@ jobs:
 
       - name: 编译 Rust 核心
         run: |
+          # 在Bash内处理包名替换（连字符转下划线）
+          CORE_PACKAGE_NAME="${{ env.CORE_PACKAGE_NAME }}"
+          CORE_SO_NAME="lib${CORE_PACKAGE_NAME//-/_}.so"
+          
           cargo clean
           export OPENSSL_INCLUDE_DIR="${{ env.OPENSSL_INSTALL_DIR }}/include"
           export OPENSSL_LIB_DIR="${{ env.OPENSSL_INSTALL_DIR }}/lib"
@@ -116,11 +120,12 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
           export ANDROID_NDK_ROOT="${{ env.ANDROID_NDK_ROOT }}"
           cargo ndk -t "${{ env.TARGET_ARCH }}" -o "${{ env.RUST_OUTPUT_DIR }}" build \
-            --package "${{ env.CORE_PACKAGE_NAME }}" \
+            --package "$CORE_PACKAGE_NAME" \
             --profile mobile
           echo "✅ Rust 核心编译完成，产物路径："
           ls -l "${{ env.RUST_OUTPUT_DIR }}"
-          cp -f "target/${{ env.TARGET_ARCH }}/mobile/lib${{ env.CORE_PACKAGE_NAME//-/_ }}.so" "${{ env.RUST_OUTPUT_DIR }}/"
+          # 复制产物（用Bash替换后的变量）
+          cp -f "target/${{ env.TARGET_ARCH }}/mobile/$CORE_SO_NAME" "${{ env.RUST_OUTPUT_DIR }}/"
           echo "✅ 最终 Rust 产物列表："
           ls -l "${{ env.RUST_OUTPUT_DIR }}"
 
@@ -135,11 +140,15 @@ jobs:
 
       - name: 检查核心文件
         run: |
+          # 在Bash内处理包名替换
+          CORE_PACKAGE_NAME="${{ env.CORE_PACKAGE_NAME }}"
+          CORE_SO_NAME="lib${CORE_PACKAGE_NAME//-/_}.so"
+          
           [ ! -f "./settings.gradle" ] && { echo "❌ 缺少 settings.gradle"; exit 1; }
           [ ! -f "./gradle.properties" ] && { echo "❌ 缺少 gradle.properties"; exit 1; }
           [ ! -f "./app/build.gradle" ] && { echo "❌ 缺少 app/build.gradle"; exit 1; }
           [ ! -f "./app/src/main/AndroidManifest.xml" ] && { echo "❌ 标准路径缺少 AndroidManifest.xml"; exit 1; }
-          CORE_SO_NAME="lib${{ env.CORE_PACKAGE_NAME//-/_ }}.so"
+          # 用Bash替换后的变量检查产物
           if [ ! -f "${{ env.RUST_OUTPUT_DIR }}/$CORE_SO_NAME" ]; then
             echo "❌ Rust 核心产物缺失（需匹配：$CORE_SO_NAME）"
             exit 1
