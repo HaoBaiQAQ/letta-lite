@@ -1,5 +1,17 @@
-// 项目名称（可自定义，比如 "LettaLiteMobile"）
-rootProject.name = "LettaLite"
+// ########## 新增：插件仓库配置（必须，否则找不到 Android 插件）##########
+pluginManagement {
+    repositories {
+        google() // Google 插件仓库（Android 插件在这里）
+        mavenCentral() // 中央仓库（依赖库在这里）
+        gradlePluginPortal() // Gradle 官方插件仓库
+    }
+    // 声明 Android 插件版本（统一管理，避免冲突）
+    plugins {
+        id 'com.android.application' version '8.4.0' apply false
+        // 如果你用 Kotlin，添加：id 'org.jetbrains.kotlin.android' version '1.9.23' apply false
+    }
+}
 
-// 声明项目包含的模块（必须有 app 模块，对应 app/ 文件夹）
+// ########## 原有配置保留 ##########
+rootProject.name = "LettaLite"
 include ":app"
