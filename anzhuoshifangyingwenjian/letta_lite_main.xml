@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="16dp"
-    android:background="@android:color/white"> <!-- 增加背景色提升体验 -->
+    android:background="@android:color/white">
 
     <TextView
         android:id="@+id/resultView"
@@ -34,14 +34,14 @@
         android:textColor="@android:color/white"
         android:paddingHorizontal="24dp"
         android:paddingVertical="12dp"
-        android:layout_gravity="end" /> <!-- 右对齐更符合交互习惯 -->
+        android:layout_gravity="end" />
 
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:layout_marginTop="8dp"
-        android:layout_gravity="end"> <!-- 右对齐与发送按钮呼应 -->
+        android:layout_gravity="end">
 
         <Button
             android:id="@+id/allowBtn"
