@@ -37,7 +37,7 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 配置NDK环境变量（32位）
+      - name: 配置NDK环境变量（32位，修正编译器名称）
         run: |
           # 查找NDK路径
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep "${{ env.NDK_VERSION }}")
@@ -45,7 +45,7 @@ jobs:
             echo "❌ 未找到NDK ${{ env.NDK_VERSION }}"
             exit 1
           fi
-          # 32位工具链路径（arm-linux-androideabi）
+          # 32位工具链路径（armv7a-linux-androideabi，修正名称）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           # 导出环境变量
@@ -53,14 +53,15 @@ jobs:
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "PATH=$PATH:$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          # 验证32位编译器
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/arm-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "❌ 32位编译器缺失"
+          # 验证32位编译器（修正名称：armv7a-linux-androideabi）
+          COMPILER_PATH="$NDK_TOOLCHAIN_BIN/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang"
+          if [ ! -f "$COMPILER_PATH" ]; then
+            echo "❌ 32位编译器缺失，路径：$COMPILER_PATH"
             exit 1
           fi
-          echo "✅ NDK配置完成（32位），路径：$NDK_PATH"
+          echo "✅ NDK配置完成（32位），编译器路径：$COMPILER_PATH"
 
-      - name: 交叉编译32位OpenSSL（适配armv7）
+      - name: 交叉编译32位OpenSSL（适配armv7，修正编译器）
         run: |
           # 创建目录
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
@@ -69,9 +70,9 @@ jobs:
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          # 32位编译配置（android-arm适配armv7）
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/arm-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/arm-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang++"
+          # 32位编译配置（修正编译器名称：armv7a-linux-androideabi）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/armv7a-linux-androideabi${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
