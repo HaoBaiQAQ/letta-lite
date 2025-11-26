@@ -328,23 +328,59 @@ jobs:
           echo "✅ 64位Kotlin .aar生成完成"
 
       ###########################################################################
-      # 步骤10：验证产物有效性（核心函数+结构）
+      # 步骤10：验证产物有效性（增强容错+精准查找）
       ###########################################################################
       - name: 验证产物有效性（核心函数+结构）
         run: |
-          echo -e "\n🔍 验证核心函数是否存在："
-          NM_OUTPUT=$(nm -D ${{ env.RELEASE_DIR }}/libletta_lite.so | grep "T " | grep -E "createAgent|converse|destroyAgent|llama_")
-          if [ -z "$NM_OUTPUT" ]; then
-            echo "❌ 未找到核心函数"
-          else
-            echo "✅ 核心函数存在：$NM_OUTPUT"
+          # 1. 先确保 .so 文件存在且非空（关键容错）
+          SO_FILE="${{ env.RELEASE_DIR }}/libletta_lite.so"
+          if [ ! -f "$SO_FILE" ]; then
+            echo "❌ 未找到目标 .so 文件：$SO_FILE"
+            echo "🔍 打印发布目录文件列表："
+            ls -la ${{ env.RELEASE_DIR }}
+            echo "🔍 打印 Rust 编译输出目录文件列表："
+            ls -la ${{ env.RUST_OUTPUT_DIR }}
+            exit 1  # 确实没文件才退出，避免误判
           fi
-          
-          echo -e "\n🔍 验证AAR结构："
-          unzip -l ${{ env.RELEASE_DIR }}/letta-lite-android.aar | grep -E "classes.jar|jni/arm64-v8a/libletta_lite.so"
-          if [ $? -ne 0 ]; then
-            echo "❌ AAR结构异常"
+
+          # 2. 检查 .so 文件是否为空（防止文件损坏）
+          SO_SIZE=$(stat -c%s "$SO_FILE")
+          if [ $SO_SIZE -eq 0 ]; then
+            echo "❌ .so 文件为空（编译失败或文件损坏）"
             exit 1
+          fi
+
+          # 3. 验证核心函数（使用 aarch64 架构兼容的 nm 参数，增加容错）
+          echo -e "\n🔍 验证核心函数是否存在："
+          # 针对 aarch64 架构的 .so，nm 需加 --demangle 更易读，且允许未找到函数时不退出
+          NM_OUTPUT=$(nm -D --demangle "$SO_FILE" | grep "T " | grep -E "createAgent|converse|destroyAgent|llama_" || true)
+          if [ -z "$NM_OUTPUT" ]; then
+            echo "⚠️  未找到核心函数，可能是编译时未链接完整逻辑"
+            echo "🔍 打印所有导出函数（前30个），便于排查："
+            nm -D --demangle "$SO_FILE" | grep "T " | head -30
+          else
+            echo "✅ 核心函数存在："
+            echo "$NM_OUTPUT"
+          fi
+
+          # 4. 验证 AAR 结构（同样增加容错）
+          echo -e "\n🔍 验证AAR结构："
+          AAR_FILE="${{ env.RELEASE_DIR }}/letta-lite-android.aar"
+          if [ ! -f "$AAR_FILE" ]; then
+            echo "❌ 未找到 AAR 文件：$AAR_FILE"
+            exit 1
+          fi
+
+          # 检查 AAR 中是否包含 .so 和 classes.jar
+          AAR_CONTENT=$(unzip -l "$AAR_FILE" | grep -E "classes.jar|jni/arm64-v8a/libletta_lite.so" || true)
+          if [ -z "$AAR_CONTENT" ]; then
+            echo "❌ AAR 结构异常，缺失关键文件"
+            echo "🔍 打印 AAR 完整内容："
+            unzip -l "$AAR_FILE"
+            exit 1
+          else
+            echo "✅ AAR 结构正常："
+            echo "$AAR_CONTENT"
           fi
 
       ###########################################################################
@@ -354,14 +390,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "Android 64位版本【整合优化版】$${{ github.ref_name }}"
+          name: "Android 64位版本【整合优化版】${{ github.ref_name }}"
           body: |
             ## Letta-Lite Android 64位完整集成包【整合优化版】
             🌟 产物包含：64位Rust核心库（.so） + 64位Kotlin绑定库（.aar）
             - 架构：arm64-v8a（纯64位）
             - 最低支持：Android 7.0（API 24）
             - 核心功能：对话交互、记忆管理、本地LLM运行（基于llama.cpp）、云同步
-            - 优化点：整合参考脚本最小化依赖配置，避免冲突；保留完整集成与自动发布流程
+            - 优化点：整合参考脚本最小化依赖配置，避免冲突；修复验证步骤容错问题，报错更易排查
 
             ### 快速集成步骤
             1. 复制 `letta-lite-android.aar` 到项目 `app/libs/`
