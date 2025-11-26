@@ -7,7 +7,7 @@ jobs:
       ANDROID_NDK_VERSION: 27.3.13750724
       ANDROID_API_LEVEL: 24
       TARGET_ARCH: aarch64-linux-android
-      ANDROID_ABI: arm64-v8a  # 新增：对应aarch64的Android ABI
+      ANDROID_ABI: arm64-v8a  # 对应aarch64的Android ABI
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
@@ -125,7 +125,7 @@ jobs:
           ls -l ${{ env.OUTPUT_DIR }}
 
       ###########################################################################
-      # 新增：生成Kotlin .aar（不修改原有编译逻辑，仅新增步骤）
+      # 新增：生成Kotlin .aar（修复注释语法错误）
       ###########################################################################
       - name: 生成Kotlin .aar（集成.so）
         run: |
@@ -149,7 +149,7 @@ jobs:
 
           class LettaLite(config: Map<String, String>) {
               init {
-                  System.loadLibrary("letta_lite")  # 对应.so文件名（去掉lib前缀）
+                  System.loadLibrary("letta_lite")  // 对应.so文件名（去掉lib前缀）
               }
 
               // Native方法（与Rust FFI对应）
@@ -158,7 +158,7 @@ jobs:
               private external fun converse(agentPtr: Long, prompt: String): String
               private external fun destroyAgent(agentPtr: Long)
 
-              private val agentPtr: Long = createAgent(config)  # 初始化Agent
+              private val agentPtr: Long = createAgent(config)  // 初始化Agent
 
               // 对外暴露的API
               fun setBlock(key: String, value: String) = setBlock(agentPtr, key, value)
@@ -174,7 +174,7 @@ jobs:
           }
           EOF
 
-          # 4. 配置build.gradle（AAR构建核心配置）
+          # 4. 配置build.gradle（修复注释语法错误：# → //，且注释单独一行）
           cat > ${{ env.AAR_MODULE_DIR }}/build.gradle << 'EOF'
           plugins {
               id 'com.android.library' version '7.4.2'
@@ -186,16 +186,17 @@ jobs:
               compileSdk 33
 
               defaultConfig {
-                  minSdk 24  # 与NDK API级别一致
+                  // 与NDK API级别一致（注释单独一行，用//）
+                  minSdk 24
                   targetSdk 33
                   ndk {
-                      abiFilters "arm64-v8a"  # 仅保留64位架构
+                      abiFilters "arm64-v8a"  // 仅保留64位架构
                   }
               }
 
               buildTypes {
                   release {
-                      minifyEnabled false  # 关闭混淆，避免影响native方法调用
+                      minifyEnabled false  // 关闭混淆，避免影响native方法调用
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
@@ -228,8 +229,8 @@ jobs:
 
           # 5. 混淆规则（保护核心类和native方法）
           cat > ${{ env.AAR_MODULE_DIR }}/proguard-rules.pro << 'EOF'
-          -keep class ai.letta.lite.LettaLite { *; }  # 保留核心类
-          -keepclasseswithmembernames class * { native <methods>; }  # 保留native方法
+          -keep class ai.letta.lite.LettaLite { *; }  // 保留核心类
+          -keepclasseswithmembernames class * { native <methods>; }  // 保留native方法
           EOF
 
           # 6. 配置settings.gradle（仓库和插件管理）
