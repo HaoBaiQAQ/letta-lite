@@ -1,181 +1,128 @@
-name: 精简版：Rust .so + Kotlin .aar 完整编译（参考脚本扩展）
-on: [workflow_dispatch]
+name: 最终版：官方脚本+AAR+自动发布
+on:
+  workflow_dispatch:  # 手动触发
+  push:
+    tags:
+      - 'v*'  # 打标签自动发布正式版
+
 jobs:
-  build-android:
+  build-and-release:
     runs-on: ubuntu-latest
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
-      ANDROID_API_LEVEL: 24
-      TARGET_ARCH: aarch64-linux-android
-      ANDROID_ABI: arm64-v8a  # 对应aarch64的Android ABI
-      OPENSSL_VERSION: 1.1.1w
-      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
-      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      OUTPUT_DIR: ${{ github.workspace }}/target/android
-      CORE_DIR: "core"
-      CORE_PACKAGE_NAME: "letta-core"
-      AAR_MODULE_DIR: ${{ github.workspace }}/letta-lite-android  # AAR工程目录
-      RELEASE_DIR: ${{ github.workspace }}/release-artifacts  # 产物汇总目录
+      RELEASE_DIR: ${{ github.workspace }}/release
+      NDK_HOME: /usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}
 
     steps:
-      - name: 拉取letta-lite源码
+      ###########################################################################
+      # 1. 拉取源码+全量子模块（官方要求必须拉全）
+      ###########################################################################
+      - name: 拉取letta-lite源码及子模块（含llama.cpp）
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: 安装基础依赖（新增JDK和Gradle，用于AAR编译）
+      ###########################################################################
+      # 2. 补全云编译缺少的依赖（官方脚本运行必需）
+      ###########################################################################
+      - name: 安装基础系统依赖
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            coreutils pkg-config make perl wget curl gcc cmake \
-            libssl-dev zlib1g-dev unzip openjdk-11-jdk binutils \
-            android-sdk-platform-tools-common
-          # 安装Gradle
-          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip -P /tmp
-          unzip -q /tmp/gradle-8.6-bin.zip -d /opt
-          echo "PATH=/opt/gradle-8.6/bin:$PATH" >> $GITHUB_ENV
+            rustc cargo openjdk-11-jdk unzip wget curl cmake make gcc \
+            pkg-config libssl-dev zlib1g-dev binutils android-sdk-platform-tools-common
 
-      - name: 正确安装NDK（空格分隔包）
+      - name: 安装Rust工具链（官方要求1.75+）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: aarch64-linux-android
+
+      - name: 安装cargo-ndk（官方编译Android必需）
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: 安装Android NDK（官方要求23+，适配你的版本）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
-      - name: 验证NDK
+      - name: 编译OpenSSL（补全官方依赖）
         run: |
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK"
-            exit 1
-          fi
-          export ANDROID_NDK_ROOT=$NDK_PATH
-          NDK_TOOLCHAIN_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          NDK_SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
-            echo "❌ 编译器缺失"
-            exit 1
-          fi
-          echo "✅ NDK验证通过"
-
-      - name: 下载并编译OpenSSL
-        run: |
-          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
-          cd ${{ env.OPENSSL_SRC_DIR }}
-          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
-          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
-          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
-          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          ./Configure linux-aarch64 no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-          make -j$(nproc) V=1
-          make install_sw && echo "✅ OpenSSL编译完成"
-
-      - name: 配置Rust环境
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          target: ${{ env.TARGET_ARCH }}
-
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version=3.5.4 --locked
-
-      - name: 修复工作区配置
-        run: |
-          # 清理根目录无效配置
-          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
-          echo "✅ 已清理根目录Cargo.toml"
-
-          # 验证子包路径
-          CORE_CARGO="${{ env.CORE_DIR }}/Cargo.toml"
-          if [ ! -f "$CORE_CARGO" ]; then
-            echo "❌ 子包目录不存在"
-            ls -l */Cargo.toml
-            exit 1
-          fi
-
-          # 添加cdylib配置（生成.so核心）
-          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
-            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
-            echo "✅ 已添加cdylib配置"
-          fi
-          cat "$CORE_CARGO" | grep -A 2 "\[lib\]"
-
-      - name: 编译核心子包（改用 --profile mobile）
-        run: |
-          cargo clean
-          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
-          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
-          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export PKG_CONFIG_ALLOW_CROSS=1
-          # 关键修改：把 --release 换成 --profile mobile
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.OUTPUT_DIR }} build \
-            --package ${{ env.CORE_PACKAGE_NAME }} \
-            --profile mobile
-          echo "✅ 编译完成，产物目录："
-          ls -l ${{ env.OUTPUT_DIR }}
-          # 兜底收集所有.so文件，避免路径问题
-          find target -name "lib*.so" -exec cp {} ${{ env.OUTPUT_DIR }}/ \;
-          echo "✅ 最终产物列表："
-          ls -l ${{ env.OUTPUT_DIR }}
+          mkdir -p openssl-src openssl-install
+          cd openssl-src
+          wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          tar -xvzf openssl-1.1.1w.tar.gz --strip-components=1
+          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          export AR="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          ./Configure linux-aarch64 no-shared no-asm --prefix=${{ github.workspace }}/openssl-install -fPIC
+          make -j$(nproc) && make install_sw
+          # 配置OpenSSL环境变量，让官方脚本找到
+          echo "OPENSSL_DIR=${{ github.workspace }}/openssl-install" >> $GITHUB_ENV
 
       ###########################################################################
-      # 新增：生成Kotlin .aar（修复注释语法错误）
+      # 3. 直接调用官方Android构建脚本（核心步骤）
       ###########################################################################
-      - name: 生成Kotlin .aar（集成.so）
+      - name: 执行官方build-android.sh脚本
         run: |
-          # 1. 创建AAR工程目录结构
-          mkdir -p ${{ env.AAR_MODULE_DIR }}/src/main/java/ai/letta/lite
-          mkdir -p ${{ env.AAR_MODULE_DIR }}/src/main/jniLibs/${{ env.ANDROID_ABI }}
+          # 给官方脚本加执行权限
+          chmod +x ./scripts/build-android.sh
+          # 运行官方脚本，生成核心.so（2.8MB左右）
+          ./scripts/build-android.sh
+          # 验证官方生成的产物
+          ls -la ./target/aarch64-linux-android/mobile/libletta_core.so
+          SO_SIZE=$(stat -c%s ./target/aarch64-linux-android/mobile/libletta_core.so)
+          echo "✅ 官方核心.so体积：$SO_SIZE 字节（正常应为2-3MB）"
+
+      ###########################################################################
+      # 4. 生成Kotlin AAR（直接集成到Android项目）
+      ###########################################################################
+      - name: 生成可直接集成的AAR文件
+        run: |
+          # 创建AAR工程目录结构
           mkdir -p ${{ env.RELEASE_DIR }}
+          mkdir -p aar/src/main/{java/ai/letta/lite,jniLibs/arm64-v8a}
 
-          # 2. 复制编译好的.so到jniLibs
-          SO_FILE=$(find ${{ env.OUTPUT_DIR }} -name "libletta_core.so" | head -n 1)
-          if [ -z "$SO_FILE" ]; then
-            echo "❌ 未找到Rust .so文件，AAR生成失败"
-            exit 1
-          fi
-          cp "$SO_FILE" ${{ env.AAR_MODULE_DIR }}/src/main/jniLibs/${{ env.ANDROID_ABI }}/libletta_lite.so
-          echo "✅ .so已复制到jniLibs"
+          # 复制官方生成的核心.so到AAR
+          cp ./target/aarch64-linux-android/mobile/libletta_core.so \
+             aar/src/main/jniLibs/arm64-v8a/libletta_lite.so
 
-          # 3. 生成Kotlin封装类（调用.so的native方法）
-          cat > ${{ env.AAR_MODULE_DIR }}/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
+          # 生成官方风格的Kotlin封装类（和文档示例一致）
+          cat > aar/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
           package ai.letta.lite
 
           class LettaLite(config: Map<String, String>) {
               init {
-                  System.loadLibrary("letta_lite")  // 对应.so文件名（去掉lib前缀）
+                  System.loadLibrary("letta_lite") // 对应.so文件名（去掉lib前缀）
               }
 
-              // Native方法（与Rust FFI对应）
+              // Native方法（与官方FFI层对齐）
               private external fun createAgent(config: Map<String, String>): Long
-              private external fun setBlock(agentPtr: Long, key: String, value: String)
+              private external fun setBlock(agentPtr: Long, key: String, value: String): Boolean
               private external fun converse(agentPtr: Long, prompt: String): String
               private external fun destroyAgent(agentPtr: Long)
 
-              private val agentPtr: Long = createAgent(config)  // 初始化Agent
+              // 初始化Agent实例
+              private val agentPtr: Long = createAgent(config)
 
-              // 对外暴露的API
-              fun setBlock(key: String, value: String) = setBlock(agentPtr, key, value)
+              // 对外暴露的核心API（和官方文档示例一致）
+              fun setBlock(key: String, value: String): Boolean = setBlock(agentPtr, key, value)
               fun converse(prompt: String): String = converse(agentPtr, prompt)
 
               // 释放资源
-              protected fun finalize() = destroyAgent(agentPtr)
+              protected fun finalize() {
+                  destroyAgent(agentPtr)
+              }
 
               // 默认创建方法
               companion object {
-                  fun createDefault(): LettaLite = LettaLite(mapOf("model" to "local", "name" to "assistant"))
+                  fun createDefault(): LettaLite = LettaLite(mapOf("model" to "local", "name" to "letta-assistant"))
               }
           }
           EOF
 
-          # 4. 配置build.gradle（修复注释语法错误：# → //，且注释单独一行）
-          cat > ${{ env.AAR_MODULE_DIR }}/build.gradle << 'EOF'
+          # 极简AAR构建配置（适配Android项目集成）
+          cat > aar/build.gradle << 'EOF'
           plugins {
               id 'com.android.library' version '7.4.2'
               id 'org.jetbrains.kotlin.android' version '1.9.20'
@@ -186,17 +133,16 @@ jobs:
               compileSdk 33
 
               defaultConfig {
-                  // 与NDK API级别一致（注释单独一行，用//）
-                  minSdk 24
+                  minSdk 24 // 兼容Android 7.0+（官方推荐）
                   targetSdk 33
                   ndk {
-                      abiFilters "arm64-v8a"  // 仅保留64位架构
+                      abiFilters "arm64-v8a" // 仅保留64位架构（主流设备）
                   }
               }
 
               buildTypes {
                   release {
-                      minifyEnabled false  // 关闭混淆，避免影响native方法调用
+                      minifyEnabled false // 关闭混淆，避免影响Native方法调用
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
@@ -210,7 +156,7 @@ jobs:
                   jvmTarget = '1.8'
               }
 
-              // 指定jniLibs目录
+              // 指定jniLibs目录位置
               sourceSets {
                   main {
                       jniLibs.srcDirs = ['src/main/jniLibs']
@@ -219,7 +165,7 @@ jobs:
           }
 
           dependencies {
-              // 基础依赖（AndroidX核心库）
+              // 基础依赖（AndroidX核心库，官方示例依赖）
               implementation 'androidx.core:core-ktx:1.12.0'
               testImplementation 'junit:junit:4.13.2'
               androidTestImplementation 'androidx.test.ext:junit:1.1.5'
@@ -227,14 +173,14 @@ jobs:
           }
           EOF
 
-          # 5. 混淆规则（保护核心类和native方法）
-          cat > ${{ env.AAR_MODULE_DIR }}/proguard-rules.pro << 'EOF'
-          -keep class ai.letta.lite.LettaLite { *; }  // 保留核心类
-          -keepclasseswithmembernames class * { native <methods>; }  // 保留native方法
+          # 混淆规则（保护核心类和Native方法）
+          cat > aar/proguard-rules.pro << 'EOF'
+          -keep class ai.letta.lite.LettaLite { *; }
+          -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
-          # 6. 配置settings.gradle（仓库和插件管理）
-          cat > ${{ env.AAR_MODULE_DIR }}/settings.gradle << 'EOF'
+          # 配置settings.gradle（仓库管理）
+          cat > aar/settings.gradle << 'EOF'
           pluginManagement {
               repositories {
                   google()
@@ -256,43 +202,53 @@ jobs:
           rootProject.name = "letta-lite-android"
           EOF
 
-          # 7. 启用AndroidX（避免依赖冲突）
-          cat > ${{ env.AAR_MODULE_DIR }}/gradle.properties << 'EOF'
+          # 启用AndroidX（避免依赖冲突）
+          cat > aar/gradle.properties << 'EOF'
           android.useAndroidX=true
           android.enableJetifier=true
           EOF
 
-          # 8. 构建AAR
-          cd ${{ env.AAR_MODULE_DIR }}
-          gradle assembleRelease --no-daemon --no-build-cache --console=plain --refresh-dependencies
-
-          # 9. 查找并复制AAR到发布目录
+          # 构建AAR并复制到发布目录
+          cd aar
+          gradle assembleRelease --no-daemon --no-build-cache
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
-          if [ -z "$AAR_FILE" ]; then
-            echo "❌ AAR打包失败"
-            exit 1
-          fi
-          cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
-          echo "✅ AAR生成完成：${{ env.RELEASE_DIR }}/letta-lite-android.aar"
-
-          # 10. 验证AAR中的.so（确保嵌入成功）
-          unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
-          AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so"
-          if [ ! -f "$AAR_SO" ]; then
-            echo "❌ AAR中未找到.so文件"
-            exit 1
-          fi
-          echo "✅ AAR中.so验证通过，架构：$(file "$AAR_SO" | grep -E "aarch64|64-bit" | awk '{print $1,$2,$3}')"
-          rm -rf temp-aar
+          cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-official.aar
+          echo "✅ AAR生成完成：${{ env.RELEASE_DIR }}/letta-lite-official.aar"
 
       ###########################################################################
-      # 修改：同时上传.so和.aar产物
+      # 5. 复制核心.so到发布目录（备用）
       ###########################################################################
-      - name: 上传产物（.so + .aar）
-        uses: actions/upload-artifact@v4
+      - name: 复制官方核心.so到发布目录
+        run: |
+          cp ./target/aarch64-linux-android/mobile/libletta_core.so \
+             ${{ env.RELEASE_DIR }}/letta-lite-official.so
+
+      ###########################################################################
+      # 6. 自动发布到GitHub Releases
+      ###########################################################################
+      - name: 发布到GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: letta-lite-android-full-mobile
-          path: |
-            ${{ env.OUTPUT_DIR }}/*.so
-            ${{ env.RELEASE_DIR }}/*.aar
-          retention-days: 14
+          tag_name: ${{ github.ref_name }}
+          name: "Letta-Lite Android 官方构建版 ${{ github.ref_name }}"
+          body: |
+            ### 产物说明
+            - 核心.so文件（letta-lite-official.so）：2.8MB左右，含所有核心功能（Agent/记忆/llama.cpp）
+            - AAR文件（letta-lite-official.aar）：可直接集成到Android项目，Kotlin调用示例见官方文档
+            - 基于官方./scripts/build-android.sh脚本构建，完全符合官方标准
+
+            ### 集成方式
+            1. 复制AAR到项目app/libs目录
+            2. 在build.gradle添加依赖：implementation files('libs/letta-lite-official.aar')
+            3. 调用示例：
+               ```kotlin
+               import ai.letta.lite.LettaLite
+               val agent = LettaLite.createDefault()
+               agent.setBlock("user_info", "Name: Alice")
+               val response = agent.converse("Hello!")
+               ```
+          files: |
+            ${{ env.RELEASE_DIR }}/letta-lite-official.so
+            ${{ env.RELEASE_DIR }}/letta-lite-official.aar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
