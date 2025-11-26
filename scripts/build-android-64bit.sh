@@ -42,11 +42,15 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（无任何参数错误，指定系统库路径）
+# 编译核心库（修复LLVM路径，不用动态获取）
 echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
-# 计算LLVM补充库路径（适配NDK 27版本）
-LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/$(ls "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/")/lib/linux/aarch64"
+# 直接使用NDK 27默认的clang路径（无需ls获取版本，兼容所有情况）
+LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+# 备用路径（如果上面路径不存在，自动切换到通配符匹配）
+if [ ! -d "$LLVM_LIB_PATH" ]; then
+    LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/aarch64"
+fi
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
