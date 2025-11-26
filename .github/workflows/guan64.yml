@@ -43,7 +43,7 @@ jobs:
           echo "PATH=/opt/gradle-8.6/bin:$PATH" >> $GITHUB_ENV
 
       ###########################################################################
-      # 步骤3：安装NDK（移除无效参数 ndk-version）
+      # 步骤3：安装NDK
       ###########################################################################
       - name: 安装Android NDK
         uses: android-actions/setup-android@v3
@@ -52,7 +52,7 @@ jobs:
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
       ###########################################################################
-      # 步骤4：配置NDK环境变量（已验证正确）
+      # 步骤4：配置NDK环境变量
       ###########################################################################
       - name: 配置NDK环境变量（锁定64位）
         run: |
@@ -85,9 +85,9 @@ jobs:
           echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译64位OpenSSL（移除无效参数 --arch=aarch64）
+      # 步骤5：编译64位OpenSSL（核心修复：静态库验证逻辑）
       ###########################################################################
-      - name: 编译64位OpenSSL（架构对齐+强制64位）
+      - name: 编译64位OpenSSL（架构对齐+正确验证）
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
@@ -95,7 +95,7 @@ jobs:
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           
-          # 强制64位编译（保留 -m64 和 -march=armv8-a，对应aarch64）
+          # 强制64位编译（保留正确参数）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang -m64"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++ -m64"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
@@ -103,7 +103,7 @@ jobs:
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
           
-          # 核心修复：移除 --arch=aarch64（OpenSSL Configure 不支持）
+          # 正确配置（linux-aarch64 对应64位）
           ./Configure linux-aarch64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
@@ -115,17 +115,32 @@ jobs:
           
           echo "✅ 64位OpenSSL编译完成，安装目录：${{ env.OPENSSL_INSTALL_DIR }}"
           
-          # 验证64位（兼容CI和本地环境）
+          # 核心修复：静态库（.a）架构验证逻辑（提取归档内目标文件验证）
           LIB_CRYPTO="${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a"
-          echo "🔍 验证libcrypto.a架构："
-          file "$LIB_CRYPTO"
+          echo "🔍 验证静态库 libcrypto.a 架构（提取内部目标文件）："
           
-          if ! file "$LIB_CRYPTO" | grep -E "aarch64|64-bit"; then
-            echo "❌ OpenSSL不是64位"
-            readelf -h "$LIB_CRYPTO" | grep "Class"
+          # 1. 创建临时目录，提取静态库中的第一个目标文件
+          mkdir -p temp-obj
+          cd temp-obj
+          ar x "$LIB_CRYPTO" 2>/dev/null  # 提取所有目标文件（忽略警告）
+          FIRST_OBJ=$(find . -name "*.o" | head -n 1)  # 取第一个目标文件
+          
+          # 2. 验证目标文件是否为ELF64
+          if [ -z "$FIRST_OBJ" ]; then
+            echo "❌ 无法提取静态库中的目标文件"
             exit 1
           fi
           
+          OBJ_CLASS=$(readelf -h "$FIRST_OBJ" | grep "Class" | awk '{print $2}')
+          echo "✅ 静态库内目标文件架构：$OBJ_CLASS"
+          
+          if [ "$OBJ_CLASS" != "ELF64" ]; then
+            echo "❌ OpenSSL不是64位"
+            exit 1
+          fi
+          
+          # 3. 清理临时文件
+          cd .. && rm -rf temp-obj
           echo "✅ OpenSSL 64位验证通过"
 
       ###########################################################################
@@ -179,7 +194,7 @@ jobs:
             exit 1
           fi
           
-          # 验证64位
+          # 动态库验证（保留原逻辑，因为.so能被file识别）
           echo "🔍 验证Rust .so架构："
           file "$SO_FILE"
           if ! file "$SO_FILE" | grep -E "aarch64|64-bit"; then
@@ -294,7 +309,7 @@ jobs:
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
           echo "✅ 64位Kotlin .aar生成完成：$AAR_FILE"
           
-          # 验证AAR中的.so
+          # 验证AAR中的.so（动态库，保留原逻辑）
           unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
           AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so"
           echo "🔍 验证AAR中的.so架构："
