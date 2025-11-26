@@ -162,7 +162,7 @@ jobs:
           echo "✅ Rust配置修复完成"
 
       ###########################################################################
-      # 步骤8：编译Rust核心库（.so）（核心修复：提前创建发布目录）
+      # 步骤8：编译Rust核心库（.so）
       ###########################################################################
       - name: 编译64位Rust核心库（.so）
         run: |
@@ -173,12 +173,10 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
           export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
           
-          # 编译Rust .so
           cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
             --package letta-core \
             --profile mobile
           
-          # 查找编译后的.so文件
           SO_FILE=$(find ${{ env.RUST_OUTPUT_DIR }} -name "libletta_core.so" | head -n 1)
           if [ -z "$SO_FILE" ]; then
             echo "❌ 未找到Rust .so文件"
@@ -186,7 +184,6 @@ jobs:
             exit 1
           fi
           
-          # 验证.so是64位
           echo "🔍 验证Rust .so架构："
           file "$SO_FILE"
           if ! file "$SO_FILE" | grep -E "aarch64|64-bit"; then
@@ -195,16 +192,14 @@ jobs:
             exit 1
           fi
           
-          # 核心修复：提前创建发布目录（确保目录存在）
           mkdir -p ${{ env.RELEASE_DIR }}
-          # 复制.so到发布目录
           cp "$SO_FILE" ${{ env.RELEASE_DIR }}/libletta_lite.so
           echo "✅ 64位Rust .so编译完成：${{ env.RELEASE_DIR }}/libletta_lite.so"
 
       ###########################################################################
-      # 步骤9：生成Kotlin .aar
+      # 步骤9：生成Kotlin .aar（核心修复：独立Gradle配置，避免根目录干扰）
       ###########################################################################
-      - name: 生成64位Kotlin .aar
+      - name: 生成64位Kotlin .aar（独立构建上下文）
         run: |
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
           mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
@@ -239,7 +234,7 @@ jobs:
           }
           EOF
 
-          # 生成build.gradle
+          # 生成build.gradle（独立库配置）
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
               id 'com.android.library'
@@ -295,14 +290,33 @@ jobs:
           -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
-          # 打包aar
+          # 核心修复1：添加独立的settings.gradle（告诉Gradle这是独立项目）
+          cat > $AAR_MODULE_DIR/settings.gradle << 'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "letta-lite-android"
+          EOF
+
+          # 核心修复2：使用--no-build-cache和--console=plain，避免缓存干扰
           cd $AAR_MODULE_DIR
-          gradle assembleRelease --no-daemon
+          gradle assembleRelease --no-daemon --no-build-cache --console=plain
           
           # 查找aar文件
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
           if [ -z "$AAR_FILE" ]; then
-            echo "❌ AAR打包失败"
+            echo "❌ AAR打包失败，打印输出目录："
             ls -la build/outputs/aar/
             exit 1
           fi
