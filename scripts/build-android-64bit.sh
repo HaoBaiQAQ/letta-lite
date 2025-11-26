@@ -47,11 +47,9 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile
 
-# 修复：生成头文件时指定目标架构，避免默认x86_64编译
+# 修复：命令格式正确，无多余空格/换行注释
 echo "Generating C header (for $TARGET_ARCH)..."
-cargo build -p letta-ffi \
-    --target "$TARGET_ARCH" \  # 关键：强制用Android 64位架构
-    --profile mobile  # 用mobile profile，和之前编译一致
+cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 只编译64位的JNI wrapper
