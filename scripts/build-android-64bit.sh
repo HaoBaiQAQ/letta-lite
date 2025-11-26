@@ -40,16 +40,22 @@ fi
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 只编译64位（arm64-v8a）
+# 修复：添加RUSTFLAGS，指定NDK系统库路径（关键）
 echo "Building for Android ($TARGET_ARCH)..."
+export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
-    build -p letta-ffi --profile mobile
+    build -p letta-ffi --profile mobile \
+    --verbose \
+    -Z build-std=std,panic_abort \
+    -Z build-std-features=panic_immediate_abort \
+    --rustFLAGS="-L $NDK_SYSROOT/aarch64-linux-android -L $NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/17/lib/linux/aarch64"
 
-# 修复：命令格式正确，无多余空格/换行注释
+# 生成C头文件（格式正确）
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
+
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 只编译64位的JNI wrapper
@@ -77,7 +83,8 @@ compile_jni() {
         -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/${arch}" \
-        -lletta_ffi
+        -lletta_ffi \
+        -llog -lunwind  # 显式链接所需系统库
 }
 
 # Only compile JNI if the C file exists
