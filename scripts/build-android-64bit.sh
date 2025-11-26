@@ -9,6 +9,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# 定义64位目标架构（全局使用）
+TARGET_ARCH="aarch64-linux-android"
+
 # Check for required tools
 check_command() {
     if ! command -v "$1" &> /dev/null; then
@@ -33,20 +36,22 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     exit 1
 fi
 
-# 只添加64位目标架构（aarch64-linux-android）
-echo "Adding 64-bit Android target..."
-rustup target add aarch64-linux-android || true
+# 只添加64位目标架构
+echo "Adding 64-bit Android target ($TARGET_ARCH)..."
+rustup target add "$TARGET_ARCH" || true
 
 # 只编译64位（arm64-v8a）
-echo "Building for Android (arm64-v8a)..."
+echo "Building for Android ($TARGET_ARCH)..."
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile
 
-# 修复：删掉 --features cbindgen，不需要这个feature也能生成头文件
-echo "Generating C header..."
-cargo build -p letta-ffi  # 去掉了 --features cbindgen
+# 修复：生成头文件时指定目标架构，避免默认x86_64编译
+echo "Generating C header (for $TARGET_ARCH)..."
+cargo build -p letta-ffi \
+    --target "$TARGET_ARCH" \  # 关键：强制用Android 64位架构
+    --profile mobile  # 用mobile profile，和之前编译一致
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 只编译64位的JNI wrapper
