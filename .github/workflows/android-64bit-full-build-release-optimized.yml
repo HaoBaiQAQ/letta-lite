@@ -11,7 +11,7 @@ jobs:
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
       RELEASE_DIR: ${{ github.workspace }}/release
-      NDK_HOME: /usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}
+      # 修复：删除 env 内的 NDK_HOME 定义，移到步骤中拼接
 
     steps:
       ###########################################################################
@@ -49,6 +49,8 @@ jobs:
 
       - name: 编译OpenSSL（补全官方依赖）
         run: |
+          # 修复：直接拼接NDK路径，不引用env内变量
+          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
           mkdir -p openssl-src openssl-install
           cd openssl-src
           wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
@@ -65,6 +67,9 @@ jobs:
       ###########################################################################
       - name: 执行官方build-android.sh脚本
         run: |
+          # 修复：拼接NDK路径并传入环境变量
+          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          export NDK_HOME
           # 给官方脚本加执行权限
           chmod +x ./scripts/build-android.sh
           # 运行官方脚本，生成核心.so（2.8MB左右）
