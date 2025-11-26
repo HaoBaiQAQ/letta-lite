@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use regex::Regex; // 新增：用于匹配空相关消息
 use crate::{
     error::{LettaError, Result},
     memory::Memory,
     message::{Message, MessageBuffer, MessageRole, ToolCallInfo},
     tool::{ToolCall, ToolExecutor, ToolResult, ToolSchema},
-    provider::{LlmProvider, CompletionRequest},
+    provider::{LlmProvider, CompletionRequest, TokenUsage},
     context::ContextManager,
 };
 
@@ -90,12 +91,25 @@ impl Agent {
         self.state = state;
         self
     }
-    
-    pub async fn step(&mut self, user_message: String) -> Result<StepResult> {
-        // Add user message
+
+    // ======================== 新增功能1：仅发送（添加消息到上下文，不触发AI回复）========================
+    /// 仅将有效消息加入上下文，不触发AI回复（对应“仅发送”按钮）
+    /// 空相关消息（纯空、空格、中英引号等）不加入上下文，也不触发回复
+    pub fn send_only(&mut self, user_message: String) -> Result<()> {
+        if Self::is_invalid_empty_message(&user_message) {
+            return Ok(()); // 空相关消息直接跳过
+        }
+
+        // 有效消息加入上下文
         let user_msg = Message::user(&user_message);
-        self.state.messages.push(user_msg.clone());
-        
+        self.state.messages.push(user_msg);
+        self.state.updated_at = Utc::now();
+        Ok(())
+    }
+
+    // ======================== 新增功能2：仅回复（基于现有上下文生成AI回复，无新消息）========================
+    /// 基于当前上下文生成AI回复，不添加新消息（对应“仅回复”按钮，支持AI自言自语）
+    pub async fn reply_only(&mut self) -> Result<StepResult> {
         let mut tool_trace = Vec::new();
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 10;
@@ -106,7 +120,7 @@ impl Agent {
                 return Err(LettaError::ToolExecution("Maximum iterations exceeded".into()));
             }
             
-            // Build prompt
+            // Build prompt（复用原有逻辑）
             let prompt = self.context.build_prompt(
                 &self.config.system_prompt,
                 &self.state.memory,
@@ -114,13 +128,13 @@ impl Agent {
                 self.config.max_messages,
             )?;
             
-            // Check if we should summarize
+            // Check if we should summarize（复用原有逻辑）
             if self.context.should_summarize() {
                 let summary = self.context.summarize_messages(&self.state.messages.messages, 10);
                 self.state.messages.push(Message::system(format!("Context summary: {}", summary)));
             }
             
-            // Get tool schemas if enabled
+            // Get tool schemas if enabled（复用原有逻辑）
             let tools = if self.config.tools_enabled {
                 self.tool_executor.get_schemas()
                     .into_iter()
@@ -130,7 +144,7 @@ impl Agent {
                 vec![]
             };
             
-            // Call LLM
+            // Call LLM（复用原有逻辑）
             let request = CompletionRequest {
                 prompt,
                 tools,
@@ -141,7 +155,7 @@ impl Agent {
             
             let completion = self.provider.complete(request).await?;
             
-            // Handle tool calls
+            // Handle tool calls（复用原有逻辑）
             if !completion.tool_calls.is_empty() {
                 let mut request_heartbeat = false;
                 
@@ -176,26 +190,66 @@ impl Agent {
                 self.state.messages.push(assistant_msg);
                 
                 if request_heartbeat || completion.request_heartbeat {
-                    continue; // Run another iteration
+                    continue;
                 }
             }
             
-            // Final response
-            if !completion.text.is_empty() {
-                let assistant_msg = Message::assistant(&completion.text);
-                self.state.messages.push(assistant_msg);
-                
-                self.state.updated_at = Utc::now();
-                
-                return Ok(StepResult {
-                    text: completion.text,
-                    tool_trace,
-                    usage: completion.usage,
-                });
-            }
+            // Final response（复用原有逻辑，补充空回复兜底）
+            let response_text = if !completion.text.is_empty() {
+                completion.text
+            } else {
+                "I have no response to share.".to_string()
+            };
+
+            let assistant_msg = Message::assistant(&response_text);
+            self.state.messages.push(assistant_msg);
+            self.state.updated_at = Utc::now();
+            
+            return Ok(StepResult {
+                text: response_text,
+                tool_trace,
+                usage: completion.usage,
+            });
         }
     }
     
+    // ======================== 微改旧功能：step方法（空相关消息不进上下文，触发自言自语）========================
+    pub async fn step(&mut self, user_message: String) -> Result<StepResult> {
+        let is_empty_related = Self::is_invalid_empty_message(&user_message);
+        let is_valid_content = !is_empty_related && !user_message.trim().is_empty();
+
+        // 1. 仅有效消息加入上下文
+        if is_valid_content {
+            let user_msg = Message::user(&user_message);
+            self.state.messages.push(user_msg);
+            self.state.updated_at = Utc::now();
+        }
+
+        // 2. 所有情况（有效消息/空相关消息）都触发AI回复：
+        // - 有效消息：基于新增上下文回复；
+        // - 空相关消息：基于现有上下文自言自语；
+        self.reply_only().await
+    }
+
+    // ======================== 辅助方法：匹配所有空相关消息（含中英引号）========================
+    /// 匹配范围：
+    /// - 纯空（无任何字符）
+    /// - 仅空格（一个或多个空格）
+    /// - 仅中英引号（英文""''、中文「」“”）
+    /// - 中英引号+空格（引号前后有任意空格）
+    fn is_invalid_empty_message(msg: &str) -> bool {
+        let trimmed = msg.trim();
+        // 正则说明：
+        // ^$: 纯空
+        // ^\s+$: 仅空格
+        // ^["'「」“”]+$: 仅中英引号（一个或多个）
+        // ^["'「」“”]+\s*$: 中英引号+尾部空格
+        // ^\s*["'「」“”]+\s*$: 空格+中英引号+空格（任意位置有空格）
+        let re = Regex::new(r"^$|^\s+$|^[\"'「」“”]+$|^[\"'「」“”]+\s*$|^\s*[\"'「」“”]+\s*$").unwrap();
+        re.is_match(trimmed)
+    }
+    
+    // ======================== 原有方法（保持不变）========================
     pub fn set_memory_block(&mut self, label: &str, value: &str) -> Result<()> {
         self.state.memory.set_block(label, value)?;
         self.state.updated_at = Utc::now();
@@ -293,5 +347,70 @@ mod tests {
         
         agent.set_memory_block("test", "test value").unwrap();
         assert_eq!(agent.get_memory_block("test"), Some("test value".to_string()));
+    }
+
+    // ======================== 新增测试：验证空相关消息逻辑 ========================
+    #[tokio::test]
+    async fn test_empty_related_message_trigger_self_talk() {
+        let config = AgentConfig::default();
+        let provider = Box::new(ToyProvider::new(ToyConfig { deterministic: true }));
+        let mut agent = Agent::new(config, provider);
+        let initial_msg_count = agent.state.messages.len();
+
+        // 测试1：纯空消息 → 不加入上下文，触发自言自语
+        let result1 = agent.step("".to_string()).await.unwrap();
+        assert!(!result1.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 1); // 仅新增AI回复
+
+        // 测试2：纯空格 → 不加入上下文，触发自言自语
+        let result2 = agent.step("   ".to_string()).await.unwrap();
+        assert!(!result2.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 2); // 仅新增AI回复
+
+        // 测试3：英文引号 → 不加入上下文，触发自言自语
+        let result3 = agent.step("\"\"".to_string()).await.unwrap(); // 英文双引号
+        let result4 = agent.step("''".to_string()).await.unwrap(); // 英文单引号
+        assert!(!result3.text.is_empty() && !result4.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 4); // 仅新增AI回复
+
+        // 测试4：中文引号 → 不加入上下文，触发自言自语
+        let result5 = agent.step("「」".to_string()).await.unwrap(); // 中文直角引号
+        let result6 = agent.step("“”".to_string()).await.unwrap(); // 中文圆角引号
+        assert!(!result5.text.is_empty() && !result6.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 6); // 仅新增AI回复
+
+        // 测试5：引号+空格 → 不加入上下文，触发自言自语
+        let result7 = agent.step("\" \"".to_string()).await.unwrap(); // 英文引号+空格
+        let result8 = agent.step("「 」".to_string()).await.unwrap(); // 中文引号+空格
+        assert!(!result7.text.is_empty() && !result8.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 8); // 仅新增AI回复
+
+        // 测试6：有效消息 → 加入上下文，触发回复
+        let result9 = agent.step("你好！".to_string()).await.unwrap();
+        assert!(!result9.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 10); // 新增用户消息+AI回复
+    }
+
+    // ======================== 新增测试：仅发送+仅回复功能 ========================
+    #[tokio::test]
+    async fn test_send_only_and_reply_only() {
+        let config = AgentConfig::default();
+        let provider = Box::new(ToyProvider::new(ToyConfig { deterministic: true }));
+        let mut agent = Agent::new(config, provider);
+
+        // 仅发送两条有效消息，不回复
+        agent.send_only("第一条消息".to_string()).unwrap();
+        agent.send_only("第二条消息".to_string()).unwrap();
+        assert_eq!(agent.state.messages.len(), 2); // 仅两条用户消息
+
+        // 仅发送空相关消息，不加入上下文
+        agent.send_only("   ".to_string()).unwrap();
+        agent.send_only("\"\"".to_string()).unwrap();
+        assert_eq!(agent.state.messages.len(), 2); // 消息数不变
+
+        // 仅回复，基于两条用户消息生成AI回复
+        let result = agent.reply_only().await.unwrap();
+        assert!(!result.text.is_empty());
+        assert_eq!(agent.state.messages.len(), 3); // 新增AI回复消息
     }
 }
