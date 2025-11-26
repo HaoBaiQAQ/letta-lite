@@ -85,7 +85,7 @@ jobs:
           echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译64位OpenSSL（核心修复：静态库验证逻辑）
+      # 步骤5：编译64位OpenSSL（正确验证静态库）
       ###########################################################################
       - name: 编译64位OpenSSL（架构对齐+正确验证）
         run: |
@@ -95,7 +95,6 @@ jobs:
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           
-          # 强制64位编译（保留正确参数）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang -m64"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++ -m64"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
@@ -103,7 +102,6 @@ jobs:
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
           
-          # 正确配置（linux-aarch64 对应64位）
           ./Configure linux-aarch64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
@@ -115,31 +113,23 @@ jobs:
           
           echo "✅ 64位OpenSSL编译完成，安装目录：${{ env.OPENSSL_INSTALL_DIR }}"
           
-          # 核心修复：静态库（.a）架构验证逻辑（提取归档内目标文件验证）
+          # 静态库验证逻辑
           LIB_CRYPTO="${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a"
-          echo "🔍 验证静态库 libcrypto.a 架构（提取内部目标文件）："
-          
-          # 1. 创建临时目录，提取静态库中的第一个目标文件
+          echo "🔍 验证静态库 libcrypto.a 架构："
           mkdir -p temp-obj
           cd temp-obj
-          ar x "$LIB_CRYPTO" 2>/dev/null  # 提取所有目标文件（忽略警告）
-          FIRST_OBJ=$(find . -name "*.o" | head -n 1)  # 取第一个目标文件
-          
-          # 2. 验证目标文件是否为ELF64
+          ar x "$LIB_CRYPTO" 2>/dev/null
+          FIRST_OBJ=$(find . -name "*.o" | head -n 1)
           if [ -z "$FIRST_OBJ" ]; then
             echo "❌ 无法提取静态库中的目标文件"
             exit 1
           fi
-          
           OBJ_CLASS=$(readelf -h "$FIRST_OBJ" | grep "Class" | awk '{print $2}')
           echo "✅ 静态库内目标文件架构：$OBJ_CLASS"
-          
           if [ "$OBJ_CLASS" != "ELF64" ]; then
             echo "❌ OpenSSL不是64位"
             exit 1
           fi
-          
-          # 3. 清理临时文件
           cd .. && rm -rf temp-obj
           echo "✅ OpenSSL 64位验证通过"
 
@@ -172,7 +162,7 @@ jobs:
           echo "✅ Rust配置修复完成"
 
       ###########################################################################
-      # 步骤8：编译Rust核心库（.so）
+      # 步骤8：编译Rust核心库（.so）（核心修复：提前创建发布目录）
       ###########################################################################
       - name: 编译64位Rust核心库（.so）
         run: |
@@ -183,10 +173,12 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
           export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
           
+          # 编译Rust .so
           cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
             --package letta-core \
             --profile mobile
           
+          # 查找编译后的.so文件
           SO_FILE=$(find ${{ env.RUST_OUTPUT_DIR }} -name "libletta_core.so" | head -n 1)
           if [ -z "$SO_FILE" ]; then
             echo "❌ 未找到Rust .so文件"
@@ -194,7 +186,7 @@ jobs:
             exit 1
           fi
           
-          # 动态库验证（保留原逻辑，因为.so能被file识别）
+          # 验证.so是64位
           echo "🔍 验证Rust .so架构："
           file "$SO_FILE"
           if ! file "$SO_FILE" | grep -E "aarch64|64-bit"; then
@@ -203,8 +195,11 @@ jobs:
             exit 1
           fi
           
+          # 核心修复：提前创建发布目录（确保目录存在）
+          mkdir -p ${{ env.RELEASE_DIR }}
+          # 复制.so到发布目录
           cp "$SO_FILE" ${{ env.RELEASE_DIR }}/libletta_lite.so
-          echo "✅ 64位Rust .so编译完成：$SO_FILE"
+          echo "✅ 64位Rust .so编译完成：${{ env.RELEASE_DIR }}/libletta_lite.so"
 
       ###########################################################################
       # 步骤9：生成Kotlin .aar
@@ -214,8 +209,10 @@ jobs:
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
           mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
           
+          # 复制.so到jniLibs
           cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}/
           
+          # 生成Kotlin封装类
           cat > $AAR_MODULE_DIR/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
           package ai.letta.lite
 
@@ -242,6 +239,7 @@ jobs:
           }
           EOF
 
+          # 生成build.gradle
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
               id 'com.android.library'
@@ -291,14 +289,17 @@ jobs:
           }
           EOF
 
+          # 生成混淆规则
           cat > $AAR_MODULE_DIR/proguard-rules.pro << 'EOF'
           -keep class ai.letta.lite.LettaLite { *; }
           -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
+          # 打包aar
           cd $AAR_MODULE_DIR
           gradle assembleRelease --no-daemon
           
+          # 查找aar文件
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
           if [ -z "$AAR_FILE" ]; then
             echo "❌ AAR打包失败"
@@ -306,10 +307,11 @@ jobs:
             exit 1
           fi
           
+          # 复制aar到发布目录
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
-          echo "✅ 64位Kotlin .aar生成完成：$AAR_FILE"
+          echo "✅ 64位Kotlin .aar生成完成：${{ env.RELEASE_DIR }}/letta-lite-android.aar"
           
-          # 验证AAR中的.so（动态库，保留原逻辑）
+          # 验证AAR中的.so
           unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
           AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so"
           echo "🔍 验证AAR中的.so架构："
