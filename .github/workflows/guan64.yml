@@ -197,9 +197,9 @@ jobs:
           echo "✅ 64位Rust .so编译完成：${{ env.RELEASE_DIR }}/libletta_lite.so"
 
       ###########################################################################
-      # 步骤9：生成Kotlin .aar（核心修复：指定插件版本+完善仓库配置）
+      # 步骤9：生成Kotlin .aar（最终无冲突配置）
       ###########################################################################
-      - name: 生成64位Kotlin .aar（独立构建+插件版本锁定）
+      - name: 生成64位Kotlin .aar（最终版）
         run: |
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
           mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
@@ -234,12 +234,10 @@ jobs:
           }
           EOF
 
-          # 核心修复1：build.gradle指定插件版本（与Gradle 8.6兼容，compileSdk 33匹配）
+          # 最终版build.gradle（删除冲突的repositories配置）
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
-              // 指定Android Gradle插件版本（7.4.2稳定版，兼容Gradle 8.6和compileSdk 33）
               id 'com.android.library' version '7.4.2'
-              // 指定Kotlin插件版本（与jvmTarget 1.8兼容）
               id 'org.jetbrains.kotlin.android' version '1.9.20'
           }
 
@@ -278,12 +276,6 @@ jobs:
               }
           }
 
-          // 核心修复2：添加仓库配置（确保依赖能下载）
-          repositories {
-              google()
-              mavenCentral()
-          }
-
           dependencies {
               implementation 'androidx.core:core-ktx:1.12.0'
               testImplementation 'junit:junit:4.13.2'
@@ -298,16 +290,14 @@ jobs:
           -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
-          # 核心修复3：完善settings.gradle（确保插件仓库生效）
+          # 完善settings.gradle（仓库配置统一在这里）
           cat > $AAR_MODULE_DIR/settings.gradle << 'EOF'
           pluginManagement {
               repositories {
-                  // 优先从Google仓库下载Android插件
                   google()
                   mavenCentral()
                   gradlePluginPortal()
               }
-              // 锁定插件版本（可选，确保一致性）
               plugins {
                   id 'com.android.library' version '7.4.2'
                   id 'org.jetbrains.kotlin.android' version '1.9.20'
@@ -323,7 +313,7 @@ jobs:
           rootProject.name = "letta-lite-android"
           EOF
 
-          # 构建AAR（添加--refresh-dependencies强制刷新依赖）
+          # 构建AAR
           cd $AAR_MODULE_DIR
           gradle assembleRelease --no-daemon --no-build-cache --console=plain --refresh-dependencies
           
