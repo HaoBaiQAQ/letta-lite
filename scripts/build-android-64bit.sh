@@ -9,10 +9,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 定义64位目标架构（全局使用）
+# 定义64位目标架构（全局统一使用）
 TARGET_ARCH="aarch64-linux-android"
 
-# Check for required tools
+# 检查必需工具
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: $1 is not installed${NC}"
@@ -23,26 +23,30 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# Check for cargo-ndk
+# 检查并安装cargo-ndk
 if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing cargo-ndk...${NC}"
     cargo install cargo-ndk
 fi
 
-# Check NDK_HOME or ANDROID_NDK_HOME
+# 检查NDK路径环境变量
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
     echo "Please set one of these environment variables to your Android NDK path"
     exit 1
 fi
+# 统一NDK路径变量
+NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 只添加64位目标架构
+# 只添加64位目标架构（避免32位冲突）
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 修复：添加RUSTFLAGS，指定NDK系统库路径（关键）
+# 编译核心库（无任何参数错误，指定系统库路径）
 echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
+# 计算LLVM补充库路径（适配NDK 27版本）
+LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/$(ls "$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/")/lib/linux/aarch64"
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
@@ -50,22 +54,19 @@ cargo ndk \
     --verbose \
     -Z build-std=std,panic_abort \
     -Z build-std-features=panic_immediate_abort \
-    --rustFLAGS="-L $NDK_SYSROOT/aarch64-linux-android -L $NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/17/lib/linux/aarch64"
+    --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
-# 生成C头文件（格式正确）
+# 生成C头文件（格式正确，指定架构和profile）
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
-
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
-# 只编译64位的JNI wrapper
+# 编译64位JNI wrapper（显式链接系统库）
 echo "Compiling JNI wrapper (arm64-v8a)..."
-NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
-
-# 只创建64位目录
+# 创建JNI输出目录
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
-# 仅编译arm64-v8a的JNI
+# JNI编译函数（仅适配arm64-v8a）
 compile_jni() {
     local arch=$1
     local triple=$2
@@ -73,7 +74,9 @@ compile_jni() {
     
     echo "  Building JNI for $arch..."
     
-    "${NDK_HOME}"/toolchains/llvm/prebuilt/*/bin/clang \
+    # 找到NDK clang编译器
+    CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+    "$CLANG_PATH/clang" \
         --target="${triple}${api_level}" \
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
@@ -84,17 +87,17 @@ compile_jni() {
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/${arch}" \
         -lletta_ffi \
-        -llog -lunwind  # 显式链接所需系统库
+        -llog -lunwind  # 显式链接Android系统库
 }
 
-# Only compile JNI if the C file exists
+# 检查JNI源文件是否存在，存在则编译
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
 fi
 
-# Build AAR（官方已经有现成的Gradle配置）
+# 构建AAR（使用官方现成的Gradle配置）
 if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
     echo "Building Android AAR (arm64-v8a)..."
     cd bindings/android
