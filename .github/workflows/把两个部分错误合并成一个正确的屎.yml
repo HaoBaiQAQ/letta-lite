@@ -1,4 +1,4 @@
-name: Android 64位完整编译+发布（Rust .so + Kotlin .aar）
+name: Android 64位完整编译+发布把两个部分错误合并成一个正确的屎（Rust .so + Kotlin .aar）
 on:
   push:
     tags:
