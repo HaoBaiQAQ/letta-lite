@@ -9,28 +9,30 @@ jobs:
   build-and-release-64bit:
     runs-on: ubuntu-latest
     env:
-      # 沿用官方依赖版本，避免冲突
+      # 强制锁定64位架构，全流程统一
+      TARGET_ARCH: aarch64-linux-android
+      ANDROID_ABI: arm64-v8a
       ANDROID_NDK_VERSION: 27.3.13750724
       ANDROID_API_LEVEL: 24
-      TARGET_ARCH: aarch64-linux-android
       OPENSSL_VERSION: 1.1.1w
-      # 官方脚本输出目录（从源码推测）
-      OFFICIAL_OUTPUT_DIR: ${{ github.workspace }}/target/android
+      # 路径配置（避免冲突）
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      RUST_OUTPUT_DIR: ${{ github.workspace }}/target/${{ env.TARGET_ARCH }}/mobile
       RELEASE_DIR: ${{ github.workspace }}/release-artifacts
 
     steps:
       ###########################################################################
-      # 步骤1：拉取源码（含子模块，确保脚本和绑定逻辑完整）
+      # 步骤1：拉取源码（含子模块）
       ###########################################################################
       - name: 拉取源码（含子模块）
         uses: actions/checkout@v4
         with:
           submodules: true
-          # 确保拉取完整脚本目录
           fetch-depth: 0
 
       ###########################################################################
-      # 步骤2：安装官方脚本依赖（精简且贴合官方要求）
+      # 步骤2：安装基础依赖
       ###########################################################################
       - name: 安装基础依赖
         run: |
@@ -40,7 +42,7 @@ jobs:
             gradle android-sdk-platform-tools-common
 
       ###########################################################################
-      # 步骤3：安装NDK（官方脚本依赖，保持版本一致）
+      # 步骤3：安装NDK（64位编译必需）
       ###########################################################################
       - name: 安装Android NDK
         uses: android-actions/setup-android@v3
@@ -49,124 +51,159 @@ jobs:
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
       ###########################################################################
-      # 步骤4：配置环境变量（供官方脚本使用）
+      # 步骤4：配置NDK环境变量（强制64位工具链）
       ###########################################################################
-      - name: 配置NDK环境变量
+      - name: 配置NDK环境变量（锁定64位）
         run: |
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
           if [ -z "$NDK_PATH" ]; then
             echo "❌ 未找到NDK ${{ env.ANDROID_NDK_VERSION }}"
             exit 1
           fi
+          # 强制使用64位工具链路径
+          NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
-          echo "PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
-          echo "✅ NDK环境配置完成"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          echo "PATH=$NDK_TOOLCHAIN_BIN:$PATH" >> $GITHUB_ENV
+          # 验证64位编译器
+          COMPILER="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          if [ ! -f "$COMPILER" ]; then
+            echo "❌ 64位编译器缺失：$COMPILER"
+            exit 1
+          fi
+          echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译OpenSSL（官方脚本可能依赖，提前编译备用）
+      # 步骤5：编译OpenSSL（强制64位，与Rust目标一致）
       ###########################################################################
-      - name: 编译OpenSSL（Android 64位）
+      - name: 编译64位OpenSSL（架构对齐）
         run: |
-          mkdir -p openssl-src openssl-install
-          cd openssl-src
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          # 交叉编译配置（贴合官方Android编译逻辑）
-          export CC="${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export AR="${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-          export RANLIB="${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+          # 强制64位配置（linux-aarch64对应arm64-v8a）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          # 关键：指定64位架构配置（linux-aarch64）
           ./Configure linux-aarch64 no-shared no-asm no-zlib \
-            --prefix=${{ github.workspace }}/openssl-install \
-            --sysroot=${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
-            -fPIC -march=armv8-a
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
           make -j$(nproc) V=1
           make install_sw
-          echo "✅ OpenSSL编译完成"
-          # 传递OpenSSL路径给官方脚本
-          echo "OPENSSL_DIR=${{ github.workspace }}/openssl-install" >> $GITHUB_ENV
+          echo "✅ 64位OpenSSL编译完成，安装目录：${{ env.OPENSSL_INSTALL_DIR }}"
+          # 验证OpenSSL架构（确保是64位）
+          file ${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a | grep "64-bit" || { echo "❌ OpenSSL不是64位"; exit 1; }
 
       ###########################################################################
-      # 步骤6：执行官方Android编译脚本（核心步骤，生成.so + Kotlin绑定）
+      # 步骤6：配置Rust环境（强制64位目标）
       ###########################################################################
-      - name: 执行官方编译脚本（生成.so + Kotlin绑定）
-        run: |
-          # 给官方脚本添加执行权限
-          chmod +x ./scripts/build-android.sh
-          # 执行官方脚本（传递NDK和OpenSSL路径）
-          OPENSSL_DIR=${{ env.OPENSSL_DIR }} \
-          ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }} \
-          ./scripts/build-android.sh
-          # 查看脚本输出目录结构（便于提取产物）
-          echo -e "\n官方脚本输出目录结构："
-          ls -l ${{ env.OFFICIAL_OUTPUT_DIR }}
-          ls -l ${{ env.OFFICIAL_OUTPUT_DIR }}/lib
-          ls -l ${{ env.OFFICIAL_OUTPUT_DIR }}/bindings 2>/dev/null || true
+      - name: 配置Rust工具链（锁定64位）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          target: ${{ env.TARGET_ARCH }}  # 仅安装64位目标
+
+      - name: 安装cargo-ndk（64位编译工具）
+        run: cargo install cargo-ndk --version=3.5.4 --locked
 
       ###########################################################################
-      # 步骤7：提取产物（.so + 生成Kotlin .aar）
+      # 步骤7：修复Rust编译配置（禁用多架构，强制64位）
       ###########################################################################
-      - name: 提取并整理产物
+      - name: 修复Rust配置（确保64位输出）
         run: |
-          mkdir -p ${{ env.RELEASE_DIR }}
-          # 1. 提取Rust核心.so（从官方脚本输出目录）
-          SO_FILE=$(find ${{ env.OFFICIAL_OUTPUT_DIR }} -name "libletta_core.so" -o -name "libletta_lite.so" | head -n 1)
+          # 清理根目录Cargo.toml中的冲突配置
+          sed -i '/^\[lib\]$/,/^$/d' Cargo.toml
+          # 确保core模块编译为cdylib（.so）
+          CORE_CARGO="${{ github.workspace }}/core/Cargo.toml"
+          if ! grep -q "crate-type = \[\"cdylib\"" "$CORE_CARGO"; then
+            echo -e "\n[lib]\ncrate-type = [\"cdylib\"]" >> "$CORE_CARGO"
+          fi
+          # 禁用ffi模块的多架构编译（如果存在）
+          FFI_CARGO="${{ github.workspace }}/ffi/Cargo.toml"
+          if [ -f "$FFI_CARGO" ]; then
+            sed -i '/target\./d' "$FFI_CARGO"  # 移除目标架构相关配置
+          fi
+          echo "✅ Rust配置修复完成（强制64位）"
+
+      ###########################################################################
+      # 步骤8：编译Rust核心库（直接调用cargo-ndk，避免官方脚本干扰）
+      ###########################################################################
+      - name: 编译64位Rust核心库（.so）
+        run: |
+          cargo clean
+          # 传递OpenSSL路径和64位环境变量
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
+          # 强制64位编译，输出到指定目录
+          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
+            --package letta-core \
+            --profile mobile
+          # 验证.so架构（确保是64位）
+          SO_FILE=$(find ${{ env.RUST_OUTPUT_DIR }} -name "libletta_core.so" | head -n 1)
           if [ -z "$SO_FILE" ]; then
-            echo "❌ 未找到官方脚本生成的.so文件"
-            find ${{ github.workspace }} -name "lib*.so"  # 全局搜索.so
+            echo "❌ 未找到64位Rust .so文件"
             exit 1
           fi
+          file "$SO_FILE" | grep "64-bit" || { echo "❌ Rust .so不是64位"; exit 1; }
+          # 复制到发布目录
+          mkdir -p ${{ env.RELEASE_DIR }}
           cp "$SO_FILE" ${{ env.RELEASE_DIR }}/libletta_lite.so
-          echo "✅ 提取.so文件：${{ env.RELEASE_DIR }}/libletta_lite.so"
+          echo "✅ 64位Rust .so编译完成：${{ env.RELEASE_DIR }}/libletta_lite.so"
 
-          # 2. 生成Kotlin .aar（基于官方示例，封装JNI调用）
-          # 创建最小化Android库模块，封装.so的JNI接口
+      ###########################################################################
+      # 步骤9：生成Kotlin .aar（64位专用）
+      ###########################################################################
+      - name: 生成64位Kotlin .aar
+        run: |
+          # 创建Android库模块（仅支持arm64-v8a）
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
-          mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/arm64-v8a
+          mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
           
-          # 复制.so到jniLibs
-          cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/arm64-v8a/
+          # 复制64位.so到jniLibs
+          cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}/
           
-          # 创建Kotlin封装类（基于官方Kotlin示例代码）
+          # Kotlin封装类（基于官方示例，适配64位）
           cat > $AAR_MODULE_DIR/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
           package ai.letta.lite
 
           class LettaLite(config: Map<String, String>) {
-              // 加载Rust核心.so
               init {
-                  System.loadLibrary("letta_lite")
+                  System.loadLibrary("letta_lite") // 加载64位.so
               }
 
-              // JNI调用Rust FFI接口（对应官方暴露的API）
+              // JNI调用Rust FFI核心接口（对应官方暴露API）
               private external fun createAgent(config: Map<String, String>): Long
               private external fun setBlock(agentPtr: Long, key: String, value: String)
               private external fun converse(agentPtr: Long, prompt: String): String
               private external fun destroyAgent(agentPtr: Long)
 
-              // 封装官方示例中的核心方法
               private val agentPtr: Long = createAgent(config)
 
-              fun setBlock(key: String, value: String) {
-                  setBlock(agentPtr, key, value)
-              }
+              fun setBlock(key: String, value: String) = setBlock(agentPtr, key, value)
+              fun converse(prompt: String): String = converse(agentPtr, prompt)
 
-              fun converse(prompt: String): String {
-                  return converse(agentPtr, prompt)
-              }
-
-              protected fun finalize() {
-                  destroyAgent(agentPtr)
-              }
+              protected fun finalize() = destroyAgent(agentPtr)
 
               companion object {
-                  fun createDefault(): LettaLite {
-                      return LettaLite(mapOf("model" to "local", "name" to "assistant"))
-                  }
+                  fun createDefault(): LettaLite = LettaLite(mapOf("model" to "local", "name" to "assistant"))
               }
           }
           EOF
 
-          # 创建build.gradle（最小化配置，用于打包aar）
+          # build.gradle（锁定64位架构，禁用32位）
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
               id 'com.android.library'
@@ -180,9 +217,9 @@ jobs:
               defaultConfig {
                   minSdk 24
                   targetSdk 33
-
-                  testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-                  consumerProguardFiles "consumer-rules.pro"
+                  ndk {
+                      abiFilters "arm64-v8a" // 仅支持64位架构
+                  }
               }
 
               buildTypes {
@@ -191,13 +228,16 @@ jobs:
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
               }
+
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
               }
+
               kotlinOptions {
                   jvmTarget = '1.8'
               }
+
               sourceSets {
                   main {
                       jniLibs.srcDirs = ['src/main/jniLibs']
@@ -213,42 +253,41 @@ jobs:
           }
           EOF
 
-          # 创建consumer-rules.pro（避免混淆JNI方法）
-          cat > $AAR_MODULE_DIR/consumer-rules.pro << 'EOF'
-          -keep class ai.letta.lite.LettaLite {
-              *;
-          }
-          -keepclasseswithmembernames class * {
-              native <methods>;
-          }
+          # 混淆规则（保护JNI方法）
+          cat > $AAR_MODULE_DIR/proguard-rules.pro << 'EOF'
+          -keep class ai.letta.lite.LettaLite { *; }
+          -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
-          # 打包aar（使用gradle命令）
+          # 打包aar
           cd $AAR_MODULE_DIR
           gradle assembleRelease --no-daemon
-          # 提取生成的aar
+          # 提取aar并验证
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
           if [ -z "$AAR_FILE" ]; then
             echo "❌ Kotlin .aar打包失败"
             exit 1
           fi
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
-          echo "✅ 生成Kotlin .aar：${{ env.RELEASE_DIR }}/letta-lite-android.aar"
+          echo "✅ 64位Kotlin .aar生成完成：${{ env.RELEASE_DIR }}/letta-lite-android.aar"
+          # 验证aar中的.so是64位
+          unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
+          file temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so | grep "64-bit" || { echo "❌ aar中的.so不是64位"; exit 1; }
+          rm -rf temp-aar
 
       ###########################################################################
-      # 步骤8：验证产物有效性
+      # 步骤10：产物最终验证
       ###########################################################################
-      - name: 验证产物
+      - name: 验证64位产物有效性
         run: |
-          # 验证.so
-          echo -e "\n🔍 验证Rust .so导出API"
+          echo -e "\n🔍 验证Rust .so（64位+导出API）"
           nm -D ${{ env.RELEASE_DIR }}/libletta_lite.so | grep "T " | grep -v "__" | head -10
-          # 验证.aar结构
-          echo -e "\n🔍 验证Kotlin .aar内容"
-          unzip -l ${{ env.RELEASE_DIR }}/letta-lite-android.aar | grep -E "classes.jar|jni/arm64-v8a"
+          
+          echo -e "\n🔍 验证Kotlin .aar（结构+64位.so）"
+          unzip -l ${{ env.RELEASE_DIR }}/letta-lite-android.aar | grep -E "classes.jar|jni/arm64-v8a/libletta_lite.so"
 
       ###########################################################################
-      # 步骤9：发布到GitHub Releases
+      # 步骤11：发布到GitHub Releases
       ###########################################################################
       - name: 发布到GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -256,31 +295,27 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: "Android 64位版本 ${{ github.ref_name }}"
           body: |
-            ## Letta-Lite Android 64位完整集成包（贴合官方流程）
-            🌟 产物包含：Rust核心库（.so） + Kotlin绑定库（.aar）
-            - 架构：arm64-v8a（兼容90%+安卓设备）
+            ## Letta-Lite Android 64位完整集成包（架构对齐版）
+            🌟 产物包含：64位Rust核心库（.so） + 64位Kotlin绑定库（.aar）
+            - 架构：arm64-v8a（纯64位，兼容90%+现代安卓设备）
             - 最低支持：Android 7.0（API 24）
-            - 编译方式：基于官方 `scripts/build-android.sh` 脚本 + 手动封装Kotlin绑定
-            - 核心功能：对话交互、记忆管理、本地LLM运行、云同步（完全对齐官方功能）
+            - 核心优化：全流程锁定64位架构，解决OpenSSL与Rust链接冲突
+            - 核心功能：对话交互、记忆管理、本地LLM运行、云同步
 
             ### 快速集成步骤
-            1. 复制 `libletta_lite.so` 到项目 `app/src/main/jniLibs/arm64-v8a/`（或直接使用aar中的.so）
-            2. 复制 `letta-lite-android.aar` 到项目 `app/libs/`
-            3. 在app/build.gradle中添加依赖：
+            1. 复制 `letta-lite-android.aar` 到项目 `app/libs/`（含64位.so，无需额外复制）
+            2. 在app/build.gradle中添加依赖：
                ```gradle
                dependencies {
                    implementation files('libs/letta-lite-android.aar')
                }
                ```
-            4. Kotlin调用示例（完全贴合官方文档）：
+            3. Kotlin调用示例：
                ```kotlin
                import ai.letta.lite.LettaLite
                
-               // 创建实例
                val lettaLite = LettaLite.createDefault()
-               // 设置记忆块
                lettaLite.setBlock("user_info", "Name: Alice, prefers concise answers")
-               // 对话交互
                val response = lettaLite.converse("你好，Letta-Lite！")
                println("Letta回复：$response")
                ```
@@ -289,6 +324,7 @@ jobs:
             - NDK版本：${{ env.ANDROID_NDK_VERSION }}
             - Rust版本：1.85.0
             - OpenSSL版本：${{ env.OPENSSL_VERSION }}
+            - 架构：纯64位（arm64-v8a），无32位兼容
           files: |
             ${{ env.RELEASE_DIR }}/libletta_lite.so
             ${{ env.RELEASE_DIR }}/letta-lite-android.aar
