@@ -231,21 +231,16 @@ impl Agent {
         self.reply_only().await
     }
 
-    // ======================== 辅助方法：匹配所有空相关消息（含中英引号）========================
+    // ======================== 辅助方法：匹配所有空相关消息（移除「」符号，保留英文引号+中文圆角引号“”）========================
     /// 匹配范围：
     /// - 纯空（无任何字符）
     /// - 仅空格（一个或多个空格）
-    /// - 仅中英引号（英文""''、中文「」“”）
-    /// - 中英引号+空格（引号前后有任意空格）
+    /// - 仅英文引号+中文圆角引号（""''“”）
+    /// - 英文引号+中文圆角引号+空格（引号前后有任意空格）
     fn is_invalid_empty_message(msg: &str) -> bool {
         let trimmed = msg.trim();
-        // 正则说明：
-        // ^$: 纯空
-        // ^\s+$: 仅空格
-        // ^["'「」“”]+$: 仅中英引号（一个或多个）
-        // ^["'「」“”]+\s*$: 中英引号+尾部空格
-        // ^\s*["'「」“”]+\s*$: 空格+中英引号+空格（任意位置有空格）
-        let re = Regex::new(r"^$|^\s+$|^[\"'「」“”]+$|^[\"'「」“”]+\s*$|^\s*[\"'「」“”]+\s*$").unwrap();
+        // 修复点1：移除「」符号；修复点2：中文圆角引号“”用Unicode转义避免编译错误
+        let re = Regex::new(r"^$|^\s+$|^[\"'\x{201c}\x{201d}]+$|^[\"'\x{201c}\x{201d}]+\s*$|^\s*[\"'\x{201c}\x{201d}]+\s*$").unwrap();
         re.is_match(trimmed)
     }
     
@@ -349,7 +344,7 @@ mod tests {
         assert_eq!(agent.get_memory_block("test"), Some("test value".to_string()));
     }
 
-    // ======================== 新增测试：验证空相关消息逻辑 ========================
+    // ======================== 新增测试：验证空相关消息逻辑（更新为移除「」后的场景）========================
     #[tokio::test]
     async fn test_empty_related_message_trigger_self_talk() {
         let config = AgentConfig::default();
@@ -373,22 +368,26 @@ mod tests {
         assert!(!result3.text.is_empty() && !result4.text.is_empty());
         assert_eq!(agent.state.messages.len(), initial_msg_count + 4); // 仅新增AI回复
 
-        // 测试4：中文引号 → 不加入上下文，触发自言自语
-        let result5 = agent.step("「」".to_string()).await.unwrap(); // 中文直角引号
-        let result6 = agent.step("“”".to_string()).await.unwrap(); // 中文圆角引号
-        assert!(!result5.text.is_empty() && !result6.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 6); // 仅新增AI回复
+        // 测试4：中文圆角引号 → 不加入上下文，触发自言自语（移除了中文直角引号「」的测试）
+        let result5 = agent.step("“”".to_string()).await.unwrap(); // 中文圆角引号
+        assert!(!result5.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 5); // 仅新增AI回复
 
         // 测试5：引号+空格 → 不加入上下文，触发自言自语
-        let result7 = agent.step("\" \"".to_string()).await.unwrap(); // 英文引号+空格
-        let result8 = agent.step("「 」".to_string()).await.unwrap(); // 中文引号+空格
-        assert!(!result7.text.is_empty() && !result8.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 8); // 仅新增AI回复
+        let result6 = agent.step("\" \"".to_string()).await.unwrap(); // 英文引号+空格
+        let result7 = agent.step("“  ”".to_string()).await.unwrap(); // 中文圆角引号+空格
+        assert!(!result6.text.is_empty() && !result7.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 7); // 仅新增AI回复
 
         // 测试6：有效消息 → 加入上下文，触发回复
-        let result9 = agent.step("你好！".to_string()).await.unwrap();
+        let result8 = agent.step("你好！".to_string()).await.unwrap();
+        assert!(!result8.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 9); // 新增用户消息+AI回复
+
+        // 测试7：中文直角引号「」 → 不再被匹配（视为有效消息，加入上下文）
+        let result9 = agent.step("「」".to_string()).await.unwrap(); // 原被过滤的「」现在视为有效消息
         assert!(!result9.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 10); // 新增用户消息+AI回复
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 11); // 新增用户消息+AI回复
     }
 
     // ======================== 新增测试：仅发送+仅回复功能 ========================
@@ -406,6 +405,7 @@ mod tests {
         // 仅发送空相关消息，不加入上下文
         agent.send_only("   ".to_string()).unwrap();
         agent.send_only("\"\"".to_string()).unwrap();
+        agent.send_only("“”".to_string()).unwrap();
         assert_eq!(agent.state.messages.len(), 2); // 消息数不变
 
         // 仅回复，基于两条用户消息生成AI回复
