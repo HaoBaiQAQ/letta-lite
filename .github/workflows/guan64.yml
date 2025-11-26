@@ -43,14 +43,13 @@ jobs:
           echo "PATH=/opt/gradle-8.6/bin:$PATH" >> $GITHUB_ENV
 
       ###########################################################################
-      # 步骤3：安装NDK
+      # 步骤3：安装NDK（移除无效参数 ndk-version）
       ###########################################################################
       - name: 安装Android NDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
 
       ###########################################################################
       # 步骤4：配置NDK环境变量（已验证正确）
@@ -86,7 +85,7 @@ jobs:
           echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译64位OpenSSL（关键修复：明确64位架构+适配验证）
+      # 步骤5：编译64位OpenSSL（移除无效参数 --arch=aarch64）
       ###########################################################################
       - name: 编译64位OpenSSL（架构对齐+强制64位）
         run: |
@@ -96,7 +95,7 @@ jobs:
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           
-          # 核心修复1：明确指定64位架构（--arch=aarch64）+ 强制64位编译（-m64）
+          # 强制64位编译（保留 -m64 和 -march=armv8-a，对应aarch64）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang -m64"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++ -m64"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
@@ -104,9 +103,8 @@ jobs:
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
           
-          # 核心修复2：Configure增加--arch=aarch64，确保架构正确
+          # 核心修复：移除 --arch=aarch64（OpenSSL Configure 不支持）
           ./Configure linux-aarch64 no-shared no-asm no-zlib \
-            --arch=aarch64 \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
             -fPIC -march=armv8-a -m64 \
@@ -117,15 +115,14 @@ jobs:
           
           echo "✅ 64位OpenSSL编译完成，安装目录：${{ env.OPENSSL_INSTALL_DIR }}"
           
-          # 核心修复3：适配CI环境的验证命令（匹配aarch64/64-bit，避免误判）
+          # 验证64位（兼容CI和本地环境）
           LIB_CRYPTO="${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a"
-          echo "🔍 验证libcrypto.a架构（打印完整file输出）："
+          echo "🔍 验证libcrypto.a架构："
           file "$LIB_CRYPTO"
           
-          # 匹配aarch64（Ubuntu输出）或64-bit（本地输出），确保兼容
           if ! file "$LIB_CRYPTO" | grep -E "aarch64|64-bit"; then
-            echo "❌ 确认OpenSSL不是64位，打印架构详情："
-            readelf -h "$LIB_CRYPTO" | grep "Class"  # 直接显示32/64位标识
+            echo "❌ OpenSSL不是64位"
+            readelf -h "$LIB_CRYPTO" | grep "Class"
             exit 1
           fi
           
@@ -182,7 +179,7 @@ jobs:
             exit 1
           fi
           
-          # 同样适配验证命令
+          # 验证64位
           echo "🔍 验证Rust .so架构："
           file "$SO_FILE"
           if ! file "$SO_FILE" | grep -E "aarch64|64-bit"; then
@@ -297,7 +294,7 @@ jobs:
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
           echo "✅ 64位Kotlin .aar生成完成：$AAR_FILE"
           
-          # 验证AAR中的.so是64位
+          # 验证AAR中的.so
           unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
           AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so"
           echo "🔍 验证AAR中的.so架构："
