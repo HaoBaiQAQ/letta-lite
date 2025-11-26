@@ -9,13 +9,11 @@ jobs:
   build-and-release-64bit:
     runs-on: ubuntu-latest
     env:
-      # 核心参数（与本地编译一致，避免差异）
       TARGET_ARCH: aarch64-linux-android
       ANDROID_ABI: arm64-v8a
       ANDROID_NDK_VERSION: 27.3.13750724
       ANDROID_API_LEVEL: 24
       OPENSSL_VERSION: 1.1.1w
-      # 路径配置（简化，避免嵌套）
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       RUST_OUTPUT_DIR: ${{ github.workspace }}/target/aarch64-linux-android/mobile
@@ -32,7 +30,7 @@ jobs:
           fetch-depth: 0
 
       ###########################################################################
-      # 步骤2：安装基础依赖（补充 Android SDK 工具）
+      # 步骤2：安装基础依赖
       ###########################################################################
       - name: 安装基础依赖
         run: |
@@ -40,55 +38,47 @@ jobs:
             coreutils pkg-config make perl wget curl gcc cmake \
             libssl-dev zlib1g-dev unzip openjdk-11-jdk binutils \
             android-sdk-platform-tools-common
-          # 手动安装 gradle（避免系统版本冲突）
           wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip -P /tmp
           unzip -q /tmp/gradle-8.6-bin.zip -d /opt
           echo "PATH=/opt/gradle-8.6/bin:$PATH" >> $GITHUB_ENV
 
       ###########################################################################
-      # 步骤3：安装NDK（明确指定路径，避免查找错误）
+      # 步骤3：安装NDK
       ###########################################################################
       - name: 安装Android NDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
-          # 强制指定NDK安装路径（简化后续查找）
           ndk-version: ${{ env.ANDROID_NDK_VERSION }}
 
       ###########################################################################
-      # 步骤4：配置NDK环境变量（关键修复：适配NDK 27+ 编译器命名）
+      # 步骤4：配置NDK环境变量（已验证正确）
       ###########################################################################
       - name: 配置NDK环境变量（锁定64位）
         run: |
-          # 直接使用 setup-android 预设的 NDK_PATH（避免find查找错误）
           NDK_PATH="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
           echo "✅ 实际NDK路径：$NDK_PATH"
           
-          # 验证NDK是否安装完整
           if [ ! -d "$NDK_PATH/toolchains/llvm" ]; then
-            echo "❌ NDK工具链缺失，路径：$NDK_PATH/toolchains/llvm"
-            ls -la "$NDK_PATH/toolchains/"  # 打印目录内容，辅助排查
+            echo "❌ NDK工具链缺失"
+            ls -la "$NDK_PATH/toolchains/"
             exit 1
           fi
           
-          # 64位工具链路径（NDK 27+ 统一为 linux-x86_64）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           
-          # 导出环境变量
           echo "ANDROID_NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "PATH=$NDK_TOOLCHAIN_BIN:$PATH" >> $GITHUB_ENV
           
-          # 关键修复：NDK 27+ 编译器命名无横杠（aarch64-linux-android24-clang）
           COMPILER="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           echo "✅ 预期编译器路径：$COMPILER"
           
-          # 验证编译器是否存在（不存在则打印目录内容排查）
           if [ ! -f "$COMPILER" ]; then
-            echo "❌ 编译器缺失，打印工具链目录下的相关文件："
+            echo "❌ 编译器缺失，打印工具链目录："
             ls -la "$NDK_TOOLCHAIN_BIN" | grep "aarch64-linux-android.*-clang"
             exit 1
           fi
@@ -96,9 +86,9 @@ jobs:
           echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译64位OpenSSL（同步编译器命名）
+      # 步骤5：编译64位OpenSSL（关键修复：明确64位架构+适配验证）
       ###########################################################################
-      - name: 编译64位OpenSSL（架构对齐）
+      - name: 编译64位OpenSSL（架构对齐+强制64位）
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
@@ -106,28 +96,43 @@ jobs:
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           
-          # 同步编译器命名（无横杠）
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          # 核心修复1：明确指定64位架构（--arch=aarch64）+ 强制64位编译（-m64）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang -m64"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++ -m64"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
           
-          # 64位配置（linux-aarch64 对应 arm64-v8a）
+          # 核心修复2：Configure增加--arch=aarch64，确保架构正确
           ./Configure linux-aarch64 no-shared no-asm no-zlib \
+            --arch=aarch64 \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
+            -fPIC -march=armv8-a -m64 \
             CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          
           make -j$(nproc) V=1
           make install_sw
           
           echo "✅ 64位OpenSSL编译完成，安装目录：${{ env.OPENSSL_INSTALL_DIR }}"
-          file ${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a | grep "64-bit" || { echo "❌ OpenSSL不是64位"; exit 1; }
+          
+          # 核心修复3：适配CI环境的验证命令（匹配aarch64/64-bit，避免误判）
+          LIB_CRYPTO="${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a"
+          echo "🔍 验证libcrypto.a架构（打印完整file输出）："
+          file "$LIB_CRYPTO"
+          
+          # 匹配aarch64（Ubuntu输出）或64-bit（本地输出），确保兼容
+          if ! file "$LIB_CRYPTO" | grep -E "aarch64|64-bit"; then
+            echo "❌ 确认OpenSSL不是64位，打印架构详情："
+            readelf -h "$LIB_CRYPTO" | grep "Class"  # 直接显示32/64位标识
+            exit 1
+          fi
+          
+          echo "✅ OpenSSL 64位验证通过"
 
       ###########################################################################
-      # 步骤6：配置Rust环境（与本地编译版本一致）
+      # 步骤6：配置Rust环境
       ###########################################################################
       - name: 配置Rust工具链（锁定64位）
         uses: dtolnay/rust-toolchain@stable
@@ -135,11 +140,11 @@ jobs:
           toolchain: 1.85.0
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（锁定版本，避免兼容性问题）
+      - name: 安装cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
       ###########################################################################
-      # 步骤7：修复Rust编译配置（保持与本地一致）
+      # 步骤7：修复Rust配置
       ###########################################################################
       - name: 修复Rust配置（确保64位输出）
         run: |
@@ -155,47 +160,50 @@ jobs:
           echo "✅ Rust配置修复完成"
 
       ###########################################################################
-      # 步骤8：编译Rust核心库（.so）（复用本地编译成功的参数）
+      # 步骤8：编译Rust核心库（.so）
       ###########################################################################
       - name: 编译64位Rust核心库（.so）
         run: |
           cargo clean
-          # 传递OpenSSL路径（与本地编译一致）
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
           export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
           
-          # 编译（参数与本地一致，避免额外修改）
           cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
             --package letta-core \
             --profile mobile
           
-          # 验证.so存在性
           SO_FILE=$(find ${{ env.RUST_OUTPUT_DIR }} -name "libletta_core.so" | head -n 1)
           if [ -z "$SO_FILE" ]; then
-            echo "❌ 未找到Rust .so文件，打印target目录："
+            echo "❌ 未找到Rust .so文件"
             ls -la ${{ env.RUST_OUTPUT_DIR }}
             exit 1
           fi
-          file "$SO_FILE" | grep "64-bit" || { echo "❌ Rust .so不是64位"; exit 1; }
+          
+          # 同样适配验证命令
+          echo "🔍 验证Rust .so架构："
+          file "$SO_FILE"
+          if ! file "$SO_FILE" | grep -E "aarch64|64-bit"; then
+            echo "❌ Rust .so不是64位"
+            readelf -h "$SO_FILE" | grep "Class"
+            exit 1
+          fi
           
           cp "$SO_FILE" ${{ env.RELEASE_DIR }}/libletta_lite.so
           echo "✅ 64位Rust .so编译完成：$SO_FILE"
 
       ###########################################################################
-      # 步骤9：生成Kotlin .aar（仅打包64位.so，不额外修改）
+      # 步骤9：生成Kotlin .aar
       ###########################################################################
       - name: 生成64位Kotlin .aar
         run: |
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
           mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
           
-          # 复制本地编译成功的.so（确保来源可靠）
           cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}/
           
-          # Kotlin封装（保持与本地测试一致）
           cat > $AAR_MODULE_DIR/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
           package ai.letta.lite
 
@@ -222,7 +230,6 @@ jobs:
           }
           EOF
 
-          # build.gradle（与本地模块配置一致）
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
               id 'com.android.library'
@@ -272,34 +279,45 @@ jobs:
           }
           EOF
 
-          # 混淆规则（保护JNI）
           cat > $AAR_MODULE_DIR/proguard-rules.pro << 'EOF'
           -keep class ai.letta.lite.LettaLite { *; }
           -keepclasseswithmembernames class * { native <methods>; }
           EOF
 
-          # 打包aar（使用手动安装的gradle，避免系统版本冲突）
           cd $AAR_MODULE_DIR
           gradle assembleRelease --no-daemon
           
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
           if [ -z "$AAR_FILE" ]; then
-            echo "❌ AAR打包失败，打印输出目录："
+            echo "❌ AAR打包失败"
             ls -la build/outputs/aar/
             exit 1
           fi
+          
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-android.aar
           echo "✅ 64位Kotlin .aar生成完成：$AAR_FILE"
+          
+          # 验证AAR中的.so是64位
+          unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
+          AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so"
+          echo "🔍 验证AAR中的.so架构："
+          file "$AAR_SO"
+          if ! file "$AAR_SO" | grep -E "aarch64|64-bit"; then
+            echo "❌ AAR中的.so不是64位"
+            readelf -h "$AAR_SO" | grep "Class"
+            exit 1
+          fi
+          rm -rf temp-aar
 
       ###########################################################################
-      # 步骤10：产物验证（确保与本地一致）
+      # 步骤10：产物最终验证
       ###########################################################################
       - name: 验证64位产物有效性
         run: |
-          echo -e "\n🔍 验证Rust .so"
+          echo -e "\n🔍 验证Rust .so导出API"
           nm -D ${{ env.RELEASE_DIR }}/libletta_lite.so | grep "T " | grep -v "__" | head -10
           
-          echo -e "\n🔍 验证Kotlin .aar"
+          echo -e "\n🔍 验证Kotlin .aar结构"
           unzip -l ${{ env.RELEASE_DIR }}/letta-lite-android.aar | grep -E "classes.jar|jni/arm64-v8a/libletta_lite.so"
 
       ###########################################################################
@@ -313,7 +331,7 @@ jobs:
           body: |
             ## Letta-Lite Android 64位完整集成包
             🌟 产物包含：64位Rust核心库（.so） + 64位Kotlin绑定库（.aar）
-            - 架构：arm64-v8a（与本地编译一致）
+            - 架构：arm64-v8a（纯64位）
             - 最低支持：Android 7.0（API 24）
             - 核心功能：对话交互、记忆管理、本地LLM运行、云同步
 
@@ -325,7 +343,7 @@ jobs:
                    implementation files('libs/letta-lite-android.aar')
                }
                ```
-            3. Kotlin调用示例（与本地测试一致）：
+            3. Kotlin调用示例：
                ```kotlin
                import ai.letta.lite.LettaLite
                
