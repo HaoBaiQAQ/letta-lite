@@ -42,13 +42,14 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（极致紧凑格式，无任何多余空格/换行）
+# 编译核心库（关键修复：用 -- 分隔 cargo-ndk 和 cargo build 的参数）
 echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
+# 格式：cargo ndk [自身参数] build -- [cargo build 参数]
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -- -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
-# 生成C头文件（紧凑格式，无多余字符）
+# 生成C头文件（格式正确）
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
@@ -57,7 +58,7 @@ cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
-# JNI编译函数（仅适配arm64-v8a，无多余格式）
+# JNI编译函数（紧凑格式，无多余字符）
 compile_jni() {
     local arch=$1
     local triple=$2
