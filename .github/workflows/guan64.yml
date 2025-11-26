@@ -9,16 +9,16 @@ jobs:
   build-and-release-64bit:
     runs-on: ubuntu-latest
     env:
-      # 强制锁定64位架构，全流程统一
+      # 强制锁定64位架构，全流程统一（避免嵌套引用）
       TARGET_ARCH: aarch64-linux-android
       ANDROID_ABI: arm64-v8a
       ANDROID_NDK_VERSION: 27.3.13750724
       ANDROID_API_LEVEL: 24
       OPENSSL_VERSION: 1.1.1w
-      # 路径配置（避免冲突）
+      # 路径配置（直接硬编码架构，不嵌套引用env）
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      RUST_OUTPUT_DIR: ${{ github.workspace }}/target/${{ env.TARGET_ARCH }}/mobile
+      RUST_OUTPUT_DIR: ${{ github.workspace }}/target/aarch64-linux-android/mobile
       RELEASE_DIR: ${{ github.workspace }}/release-artifacts
 
     steps:
@@ -67,8 +67,8 @@ jobs:
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "PATH=$NDK_TOOLCHAIN_BIN:$PATH" >> $GITHUB_ENV
-          # 验证64位编译器
-          COMPILER="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang"
+          # 验证64位编译器（直接使用硬编码架构，避免嵌套引用）
+          COMPILER="$NDK_TOOLCHAIN_BIN/aarch64-linux-android-${{ env.ANDROID_API_LEVEL }}-clang"
           if [ ! -f "$COMPILER" ]; then
             echo "❌ 64位编译器缺失：$COMPILER"
             exit 1
@@ -76,7 +76,7 @@ jobs:
           echo "✅ 64位NDK环境配置完成，编译器：$COMPILER"
 
       ###########################################################################
-      # 步骤5：编译OpenSSL（强制64位，与Rust目标一致）
+      # 步骤5：编译64位OpenSSL（架构对齐）
       ###########################################################################
       - name: 编译64位OpenSSL（架构对齐）
         run: |
@@ -85,9 +85,9 @@ jobs:
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          # 强制64位配置（linux-aarch64对应arm64-v8a）
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang++"
+          # 强制64位配置（直接使用硬编码架构）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android-${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android-${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
@@ -111,7 +111,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
-          target: ${{ env.TARGET_ARCH }}  # 仅安装64位目标
+          target: aarch64-linux-android  # 直接硬编码目标架构
 
       - name: 安装cargo-ndk（64位编译工具）
         run: cargo install cargo-ndk --version=3.5.4 --locked
@@ -136,7 +136,7 @@ jobs:
           echo "✅ Rust配置修复完成（强制64位）"
 
       ###########################################################################
-      # 步骤8：编译Rust核心库（直接调用cargo-ndk，避免官方脚本干扰）
+      # 步骤8：编译Rust核心库（.so）
       ###########################################################################
       - name: 编译64位Rust核心库（.so）
         run: |
@@ -147,8 +147,8 @@ jobs:
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export PKG_CONFIG_ALLOW_CROSS=1
           export ANDROID_NDK_ROOT=${{ env.ANDROID_NDK_ROOT }}
-          # 强制64位编译，输出到指定目录
-          cargo ndk -t ${{ env.TARGET_ARCH }} -o ${{ env.RUST_OUTPUT_DIR }} build \
+          # 强制64位编译（直接硬编码目标架构）
+          cargo ndk -t aarch64-linux-android -o ${{ env.RUST_OUTPUT_DIR }} build \
             --package letta-core \
             --profile mobile
           # 验证.so架构（确保是64位）
@@ -170,10 +170,10 @@ jobs:
         run: |
           # 创建Android库模块（仅支持arm64-v8a）
           AAR_MODULE_DIR="${{ github.workspace }}/letta-lite-android"
-          mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}
+          mkdir -p $AAR_MODULE_DIR/src/main/java/ai/letta/lite $AAR_MODULE_DIR/src/main/jniLibs/arm64-v8a
           
           # 复制64位.so到jniLibs
-          cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/${{ env.ANDROID_ABI }}/
+          cp ${{ env.RELEASE_DIR }}/libletta_lite.so $AAR_MODULE_DIR/src/main/jniLibs/arm64-v8a/
           
           # Kotlin封装类（基于官方示例，适配64位）
           cat > $AAR_MODULE_DIR/src/main/java/ai/letta/lite/LettaLite.kt << 'EOF'
@@ -272,7 +272,7 @@ jobs:
           echo "✅ 64位Kotlin .aar生成完成：${{ env.RELEASE_DIR }}/letta-lite-android.aar"
           # 验证aar中的.so是64位
           unzip -q ${{ env.RELEASE_DIR }}/letta-lite-android.aar -d temp-aar
-          file temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_lite.so | grep "64-bit" || { echo "❌ aar中的.so不是64位"; exit 1; }
+          file temp-aar/jni/arm64-v8a/libletta_lite.so | grep "64-bit" || { echo "❌ aar中的.so不是64位"; exit 1; }
           rm -rf temp-aar
 
       ###########################################################################
