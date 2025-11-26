@@ -68,7 +68,7 @@ jobs:
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "PATH=$NDK_TOOLCHAIN_BIN:$PATH" >> $GITHUB_ENV
           # 验证64位编译器
-          COMPILER="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          COMPILER="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang"
           if [ ! -f "$COMPILER" ]; then
             echo "❌ 64位编译器缺失：$COMPILER"
             exit 1
@@ -86,8 +86,8 @@ jobs:
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           rm openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           # 强制64位配置（linux-aarch64对应arm64-v8a）
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
