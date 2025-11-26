@@ -44,9 +44,9 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile
 
-# Generate header file
+# 修复：删掉 --features cbindgen，不需要这个feature也能生成头文件
 echo "Generating C header..."
-cargo build -p letta-ffi --features cbindgen
+cargo build -p letta-ffi  # 去掉了 --features cbindgen
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 只编译64位的JNI wrapper
