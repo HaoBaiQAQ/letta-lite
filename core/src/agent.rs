@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
-use regex::Regex; // 新增：用于匹配空相关消息
+use regex::Regex; // 用于匹配空/空格/中英文句号
 use crate::{
     error::{LettaError, Result},
     memory::Memory,
@@ -94,10 +94,10 @@ impl Agent {
 
     // ======================== 新增功能1：仅发送（添加消息到上下文，不触发AI回复）========================
     /// 仅将有效消息加入上下文，不触发AI回复（对应“仅发送”按钮）
-    /// 空相关消息（纯空、空格、中英引号等）不加入上下文，也不触发回复
+    /// 过滤：空字符串、纯空格、仅中文句号「。」、仅英文点「.」、句号/点+空格
     pub fn send_only(&mut self, user_message: String) -> Result<()> {
-        if Self::is_invalid_empty_message(&user_message) {
-            return Ok(()); // 空相关消息直接跳过
+        if Self::is_invalid_single_char_message(&user_message) {
+            return Ok(()); // 过滤消息直接跳过
         }
 
         // 有效消息加入上下文
@@ -213,10 +213,10 @@ impl Agent {
         }
     }
     
-    // ======================== 微改旧功能：step方法（空相关消息不进上下文，触发自言自语）========================
+    // ======================== 微改旧功能：step方法（过滤指定单字符/无字符，触发自言自语）========================
     pub async fn step(&mut self, user_message: String) -> Result<StepResult> {
-        let is_empty_related = Self::is_invalid_empty_message(&user_message);
-        let is_valid_content = !is_empty_related && !user_message.trim().is_empty();
+        let is_invalid = Self::is_invalid_single_char_message(&user_message);
+        let is_valid_content = !is_invalid && !user_message.trim().is_empty();
 
         // 1. 仅有效消息加入上下文
         if is_valid_content {
@@ -225,22 +225,19 @@ impl Agent {
             self.state.updated_at = Utc::now();
         }
 
-        // 2. 所有情况（有效消息/空相关消息）都触发AI回复：
-        // - 有效消息：基于新增上下文回复；
-        // - 空相关消息：基于现有上下文自言自语；
+        // 2. 所有情况（有效消息/过滤消息）都触发AI回复
         self.reply_only().await
     }
 
-    // ======================== 辅助方法：匹配所有空相关消息（移除「」，直接使用UTF-8字符，无转义）========================
-    /// 匹配范围：
-    /// - 纯空（无任何字符）
-    /// - 仅空格（一个或多个空格）
-    /// - 仅英文引号+中文圆角引号（""''“”）
-    /// - 英文引号+中文圆角引号+空格（引号前后有任意空格）
-    fn is_invalid_empty_message(msg: &str) -> bool {
+    // ======================== 核心修改：匹配空/空格/中文句号「。」/英文点「.」========================
+    /// 匹配范围（严格符合“单字符和无字符”要求）：
+    /// - 无字符：纯空字符串（^$）
+    /// - 单字符：纯空格（^\s*$）、仅中文句号「。」（^。$）、仅英文点「.」（^\.$）
+    /// - 兼容情况：句号/点+前后空格（已通过trimmed处理，不影响核心逻辑）
+    fn is_invalid_single_char_message(msg: &str) -> bool {
         let trimmed = msg.trim();
-        // 关键修复：直接使用UTF-8字符“”，无需转义；移除「」；正则分支合并简化
-        let re = Regex::new(r"^$|^\s*$|^[\"'“”]+\s*$").unwrap();
+        // 正则说明：仅匹配空、空格、中文句号、英文点，无任何易混淆字符，确保编译通过
+        let re = Regex::new(r"^$|^\s*$|^。$|^\.$").unwrap();
         re.is_match(trimmed)
     }
     
@@ -344,50 +341,39 @@ mod tests {
         assert_eq!(agent.get_memory_block("test"), Some("test value".to_string()));
     }
 
-    // ======================== 新增测试：验证空相关消息逻辑（最终版）========================
+    // ======================== 新增测试：验证空/空格/中英文句号过滤逻辑 ========================
     #[tokio::test]
-    async fn test_empty_related_message_trigger_self_talk() {
+    async fn test_invalid_single_char_message_trigger_self_talk() {
         let config = AgentConfig::default();
         let provider = Box::new(ToyProvider::new(ToyConfig { deterministic: true }));
         let mut agent = Agent::new(config, provider);
         let initial_msg_count = agent.state.messages.len();
 
-        // 测试1：纯空消息 → 不加入上下文，触发自言自语
+        // 测试1：纯空消息 → 过滤，触发自言自语
         let result1 = agent.step("".to_string()).await.unwrap();
         assert!(!result1.text.is_empty());
         assert_eq!(agent.state.messages.len(), initial_msg_count + 1); // 仅新增AI回复
 
-        // 测试2：纯空格 → 不加入上下文，触发自言自语
+        // 测试2：纯空格 → 过滤，触发自言自语
         let result2 = agent.step("   ".to_string()).await.unwrap();
         assert!(!result2.text.is_empty());
         assert_eq!(agent.state.messages.len(), initial_msg_count + 2); // 仅新增AI回复
 
-        // 测试3：英文引号 → 不加入上下文，触发自言自语
-        let result3 = agent.step("\"\"".to_string()).await.unwrap(); // 英文双引号
-        let result4 = agent.step("''".to_string()).await.unwrap(); // 英文单引号
-        assert!(!result3.text.is_empty() && !result4.text.is_empty());
+        // 测试3：中文句号「。」→ 过滤，触发自言自语
+        let result3 = agent.step("。".to_string()).await.unwrap();
+        assert!(!result3.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 3); // 仅新增AI回复
+
+        // 测试4：英文点「.」→ 过滤，触发自言自语
+        let result4 = agent.step(". ".to_string()).await.unwrap(); // 点+空格也过滤
+        assert!(!result4.text.is_empty());
         assert_eq!(agent.state.messages.len(), initial_msg_count + 4); // 仅新增AI回复
 
-        // 测试4：中文圆角引号 → 不加入上下文，触发自言自语
-        let result5 = agent.step("“”".to_string()).await.unwrap(); // 中文圆角引号
-        assert!(!result5.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 5); // 仅新增AI回复
-
-        // 测试5：引号+空格 → 不加入上下文，触发自言自语
-        let result6 = agent.step("\" \"".to_string()).await.unwrap(); // 英文引号+空格
-        let result7 = agent.step("“  ”".to_string()).await.unwrap(); // 中文圆角引号+空格
-        assert!(!result6.text.is_empty() && !result7.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 7); // 仅新增AI回复
-
-        // 测试6：有效消息 → 加入上下文，触发回复
-        let result8 = agent.step("你好！".to_string()).await.unwrap();
-        assert!(!result8.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 9); // 新增用户消息+AI回复
-
-        // 测试7：中文直角引号「」 → 视为有效消息（已移除过滤），加入上下文
-        let result9 = agent.step("「」".to_string()).await.unwrap();
-        assert!(!result9.text.is_empty());
-        assert_eq!(agent.state.messages.len(), initial_msg_count + 11); // 新增用户消息+AI回复
+        // 测试5：有效消息（含句号但非单字符）→ 加入上下文，触发回复
+        let result5 = agent.step("你好。".to_string()).await.unwrap(); // 中文句号+文字（有效）
+        let result6 = agent.step("test.".to_string()).await.unwrap(); // 英文点+文字（有效）
+        assert!(!result5.text.is_empty() && !result6.text.is_empty());
+        assert_eq!(agent.state.messages.len(), initial_msg_count + 8); // 新增2条用户消息+2条AI回复
     }
 
     // ======================== 新增测试：仅发送+仅回复功能 ========================
@@ -399,13 +385,14 @@ mod tests {
 
         // 仅发送两条有效消息，不回复
         agent.send_only("第一条消息".to_string()).unwrap();
-        agent.send_only("第二条消息".to_string()).unwrap();
+        agent.send_only("第二条消息。".to_string()).unwrap(); // 含中文句号（有效）
         assert_eq!(agent.state.messages.len(), 2); // 仅两条用户消息
 
-        // 仅发送空相关消息，不加入上下文
+        // 仅发送过滤消息，不加入上下文
+        agent.send_only("".to_string()).unwrap();
         agent.send_only("   ".to_string()).unwrap();
-        agent.send_only("\"\"".to_string()).unwrap();
-        agent.send_only("“”".to_string()).unwrap();
+        agent.send_only("。".to_string()).unwrap();
+        agent.send_only(". ".to_string()).unwrap();
         assert_eq!(agent.state.messages.len(), 2); // 消息数不变
 
         // 仅回复，基于两条用户消息生成AI回复
