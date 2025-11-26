@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       ###########################################################################
-      # 2. 补全依赖（仅64位，官方脚本没处理的OpenSSL）
+      # 2. 补全依赖+关键：设置编译器路径
       ###########################################################################
       - name: 安装基础依赖
         run: |
@@ -33,15 +33,27 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
+      - name: 配置Android 64位编译器路径（关键修复）
+        run: |
+          # 找到NDK里的64位编译器路径
+          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # 告诉cargo，aarch64架构的编译器是哪个
+          echo "CC_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          echo "CXX_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang++" >> $GITHUB_ENV
+          # 把编译器路径加入系统PATH
+          echo "$CLANG_PATH" >> $GITHUB_PATH
+
       - name: 编译64位OpenSSL（补官方脚本依赖）
         run: |
           NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p openssl-src openssl-install
           cd openssl-src
           wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -xvzf openssl-1.1.1w.tar.gz --strip-components=1
-          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          export AR="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export CC="$CLANG_PATH/aarch64-linux-android24-clang"
+          export AR="$CLANG_PATH/llvm-ar"
           ./Configure linux-aarch64 no-shared no-asm --prefix=${{ github.workspace }}/openssl-install -fPIC
           make -j$(nproc) && make install_sw
           # 传入OpenSSL路径给官方脚本
