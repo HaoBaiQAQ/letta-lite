@@ -1,4 +1,4 @@
-name: 最终版：官方脚本+AAR+自动发布
+name: 最终版：官方脚本+AAR+自动发布（仅64位）
 on:
   workflow_dispatch:  # 手动触发
   push:
@@ -11,7 +11,8 @@ jobs:
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
       RELEASE_DIR: ${{ github.workspace }}/release
-      # 修复：删除 env 内的 NDK_HOME 定义，移到步骤中拼接
+      # 强制只编译64位架构（aarch64）
+      TARGET_ARCH: aarch64-linux-android
 
     steps:
       ###########################################################################
@@ -24,7 +25,7 @@ jobs:
           fetch-depth: 0
 
       ###########################################################################
-      # 2. 补全云编译缺少的依赖（官方脚本运行必需）
+      # 2. 补全云编译缺少的依赖（仅64位相关）
       ###########################################################################
       - name: 安装基础系统依赖
         run: |
@@ -32,64 +33,68 @@ jobs:
             rustc cargo openjdk-11-jdk unzip wget curl cmake make gcc \
             pkg-config libssl-dev zlib1g-dev binutils android-sdk-platform-tools-common
 
-      - name: 安装Rust工具链（官方要求1.75+）
+      - name: 安装Rust工具链（仅64位target）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          target: aarch64-linux-android
+          target: ${{ env.TARGET_ARCH }}  # 只安装aarch64 target，不安装armv7
 
       - name: 安装cargo-ndk（官方编译Android必需）
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 安装Android NDK（官方要求23+，适配你的版本）
+      - name: 安装Android NDK（仅64位相关配置）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
-      - name: 编译OpenSSL（补全官方依赖）
+      - name: 编译64位OpenSSL（与目标架构一致）
         run: |
-          # 修复：直接拼接NDK路径，不引用env内变量
           NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
           mkdir -p openssl-src openssl-install
           cd openssl-src
           wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -xvzf openssl-1.1.1w.tar.gz --strip-components=1
+          # 明确指定64位编译器和架构
           export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
           export AR="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export RANLIB="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
           ./Configure linux-aarch64 no-shared no-asm --prefix=${{ github.workspace }}/openssl-install -fPIC
           make -j$(nproc) && make install_sw
-          # 配置OpenSSL环境变量，让官方脚本找到
+          # 配置OpenSSL环境变量，仅64位可用
           echo "OPENSSL_DIR=${{ github.workspace }}/openssl-install" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
       ###########################################################################
-      # 3. 直接调用官方Android构建脚本（核心步骤）
+      # 3. 调用官方脚本（强制只编译64位）
       ###########################################################################
-      - name: 执行官方build-android.sh脚本
+      - name: 执行官方build-android.sh脚本（仅64位）
         run: |
-          # 修复：拼接NDK路径并传入环境变量
           NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
           export NDK_HOME
+          export TARGET_ARCH="${{ env.TARGET_ARCH }}"  # 告诉官方脚本只编译64位
+          export CARGO_TARGET="${{ env.TARGET_ARCH }}"  # 限制cargo目标架构
+          export RUSTFLAGS="-C target-feature=+neon"  # 64位架构优化
           # 给官方脚本加执行权限
           chmod +x ./scripts/build-android.sh
-          # 运行官方脚本，生成核心.so（2.8MB左右）
+          # 运行官方脚本，仅编译64位
           ./scripts/build-android.sh
-          # 验证官方生成的产物
-          ls -la ./target/aarch64-linux-android/mobile/libletta_core.so
-          SO_SIZE=$(stat -c%s ./target/aarch64-linux-android/mobile/libletta_core.so)
-          echo "✅ 官方核心.so体积：$SO_SIZE 字节（正常应为2-3MB）"
+          # 验证64位产物
+          ls -la ./target/${{ env.TARGET_ARCH }}/mobile/libletta_core.so
+          SO_SIZE=$(stat -c%s ./target/${{ env.TARGET_ARCH }}/mobile/libletta_core.so)
+          echo "✅ 64位核心.so体积：$SO_SIZE 字节（正常应为2-3MB）"
 
       ###########################################################################
-      # 4. 生成Kotlin AAR（直接集成到Android项目）
+      # 4. 生成Kotlin AAR（仅64位）
       ###########################################################################
-      - name: 生成可直接集成的AAR文件
+      - name: 生成可直接集成的AAR文件（仅64位）
         run: |
           # 创建AAR工程目录结构
           mkdir -p ${{ env.RELEASE_DIR }}
           mkdir -p aar/src/main/{java/ai/letta/lite,jniLibs/arm64-v8a}
 
-          # 复制官方生成的核心.so到AAR
-          cp ./target/aarch64-linux-android/mobile/libletta_core.so \
+          # 复制64位核心.so到AAR
+          cp ./target/${{ env.TARGET_ARCH }}/mobile/libletta_core.so \
              aar/src/main/jniLibs/arm64-v8a/libletta_lite.so
 
           # 生成官方风格的Kotlin封装类（和文档示例一致）
@@ -98,7 +103,7 @@ jobs:
 
           class LettaLite(config: Map<String, String>) {
               init {
-                  System.loadLibrary("letta_lite") // 对应.so文件名（去掉lib前缀）
+                  System.loadLibrary("letta_lite") // 对应64位.so文件名
               }
 
               // Native方法（与官方FFI层对齐）
@@ -126,7 +131,7 @@ jobs:
           }
           EOF
 
-          # 极简AAR构建配置（适配Android项目集成）
+          # 极简AAR构建配置（仅64位）
           cat > aar/build.gradle << 'EOF'
           plugins {
               id 'com.android.library' version '7.4.2'
@@ -138,10 +143,10 @@ jobs:
               compileSdk 33
 
               defaultConfig {
-                  minSdk 24 // 兼容Android 7.0+（官方推荐）
+                  minSdk 24 // 兼容Android 7.0+（64位设备主流版本）
                   targetSdk 33
                   ndk {
-                      abiFilters "arm64-v8a" // 仅保留64位架构（主流设备）
+                      abiFilters "arm64-v8a" // 仅保留64位架构，禁用32位
                   }
               }
 
@@ -218,14 +223,14 @@ jobs:
           gradle assembleRelease --no-daemon --no-build-cache
           AAR_FILE=$(find build/outputs/aar -name "*.aar" | head -n 1)
           cp "$AAR_FILE" ${{ env.RELEASE_DIR }}/letta-lite-official.aar
-          echo "✅ AAR生成完成：${{ env.RELEASE_DIR }}/letta-lite-official.aar"
+          echo "✅ 64位AAR生成完成：${{ env.RELEASE_DIR }}/letta-lite-official.aar"
 
       ###########################################################################
       # 5. 复制核心.so到发布目录（备用）
       ###########################################################################
-      - name: 复制官方核心.so到发布目录
+      - name: 复制64位核心.so到发布目录
         run: |
-          cp ./target/aarch64-linux-android/mobile/libletta_core.so \
+          cp ./target/${{ env.TARGET_ARCH }}/mobile/libletta_core.so \
              ${{ env.RELEASE_DIR }}/letta-lite-official.so
 
       ###########################################################################
@@ -235,12 +240,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: "Letta-Lite Android 官方构建版 ${{ github.ref_name }}"
+          name: "Letta-Lite Android 64位官方构建版 ${{ github.ref_name }}"
           body: |
             ### 产物说明
-            - 核心.so文件（letta-lite-official.so）：2.8MB左右，含所有核心功能（Agent/记忆/llama.cpp）
-            - AAR文件（letta-lite-official.aar）：可直接集成到Android项目，Kotlin调用示例见官方文档
-            - 基于官方./scripts/build-android.sh脚本构建，完全符合官方标准
+            - 核心.so文件（letta-lite-official.so）：2.8MB左右，64位（aarch64），含所有核心功能（Agent/记忆/llama.cpp）
+            - AAR文件（letta-lite-official.aar）：仅64位（arm64-v8a），可直接集成到Android项目
+            - 基于官方./scripts/build-android.sh脚本构建，完全符合官方标准，无架构兼容问题
 
             ### 集成方式
             1. 复制AAR到项目app/libs目录
