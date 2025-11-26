@@ -197,7 +197,7 @@ jobs:
           echo "✅ 64位Rust .so编译完成：${{ env.RELEASE_DIR }}/libletta_lite.so"
 
       ###########################################################################
-      # 步骤9：生成Kotlin .aar（最终无冲突配置）
+      # 步骤9：生成Kotlin .aar（最终修复：添加AndroidX开关）
       ###########################################################################
       - name: 生成64位Kotlin .aar（最终版）
         run: |
@@ -234,7 +234,7 @@ jobs:
           }
           EOF
 
-          # 最终版build.gradle（删除冲突的repositories配置）
+          # 最终版build.gradle（无冲突配置）
           cat > $AAR_MODULE_DIR/build.gradle << 'EOF'
           plugins {
               id 'com.android.library' version '7.4.2'
@@ -311,6 +311,14 @@ jobs:
               }
           }
           rootProject.name = "letta-lite-android"
+          EOF
+
+          # 核心修复：添加AndroidX开关文件（gradle.properties）
+          cat > $AAR_MODULE_DIR/gradle.properties << 'EOF'
+          # 开启AndroidX支持（解决依赖冲突）
+          android.useAndroidX=true
+          # 自动兼容旧库（避免其他依赖问题）
+          android.enableJetifier=true
           EOF
 
           # 构建AAR
