@@ -42,79 +42,48 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（关键修复：--rustflags 移到 build 后面，作为 cargo build 的参数）
+# 编译核心库（极致紧凑格式，无任何多余空格/换行）
 echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
-# NDK 27默认clang路径（无需动态获取，稳定可靠）
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-cargo ndk \
-    -t arm64-v8a \
-    -o bindings/android/src/main/jniLibs \
-    build \  # 先写 build 命令
-    -p letta-ffi --profile mobile \
-    --verbose \
-    -Z build-std=std,panic_abort \
-    -Z build-std-features=panic_immediate_abort \
-    --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"  # 移到 build 后面
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
-# 生成C头文件（格式正确，指定架构和profile）
+# 生成C头文件（紧凑格式，无多余字符）
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 编译64位JNI wrapper（显式链接系统库）
 echo "Compiling JNI wrapper (arm64-v8a)..."
-# 创建JNI输出目录
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
-# JNI编译函数（仅适配arm64-v8a）
+# JNI编译函数（仅适配arm64-v8a，无多余格式）
 compile_jni() {
     local arch=$1
     local triple=$2
     local api_level=24
-    
     echo "  Building JNI for $arch..."
-    
-    # 找到NDK clang编译器
     CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    "$CLANG_PATH/clang" \
-        --target="${triple}${api_level}" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
-        -I"${NDK_HOME}/sysroot/usr/include" \
-        -Iffi/include \
-        -shared \
-        -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
-        bindings/android/src/main/jni/letta_jni.c \
-        -L"bindings/android/src/main/jniLibs/${arch}" \
-        -lletta_ffi \
-        -llog -lunwind  # 显式链接Android系统库
+    "$CLANG_PATH/clang" --target="${triple}${api_level}" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" -I"${NDK_HOME}/sysroot/usr/include" -Iffi/include -shared -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" bindings/android/src/main/jni/letta_jni.c -L"bindings/android/src/main/jniLibs/${arch}" -lletta_ffi -llog -lunwind
 }
 
-# 检查JNI源文件是否存在，存在则编译
+# 检查JNI源文件并编译
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
 fi
 
-# 构建AAR（使用官方现成的Gradle配置）
+# 构建AAR（使用官方现成配置）
 if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
     echo "Building Android AAR (arm64-v8a)..."
     cd bindings/android
-    if [ -f "gradlew" ]; then
-        ./gradlew assembleRelease
-    else
-        gradle assembleRelease
-    fi
+    [ -f "gradlew" ] && ./gradlew assembleRelease || gradle assembleRelease
     cd ../..
-    
     echo -e "${GREEN}64-bit Android build complete!${NC}"
-    echo ""
     echo "AAR location: bindings/android/build/outputs/aar/android-release.aar"
 else
     echo -e "${GREEN}64-bit Android libraries built!${NC}"
-    echo ""
     echo "Libraries location: bindings/android/src/main/jniLibs/"
 fi
 
