@@ -23,6 +23,10 @@ check_command() {
 check_command rustup
 check_command cargo
 
+# 🔧 关键修复1：显式获取当前活跃的 Rust 工具链（避免工具链不匹配）
+ACTIVE_TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}')
+echo -e "✅ Active Rust toolchain: ${ACTIVE_TOOLCHAIN}"
+
 # 原作者cargo-ndk安装（用原作者方式，不指定版本避免冲突）
 if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing cargo-ndk...${NC}"
@@ -36,16 +40,25 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 关键修复：强制安装aarch64目标，失败不忽略，安装后验证
-echo "Adding Android 64-bit target (aarch64-linux-android)..."
-# 去掉|| true，安装失败直接报错，不继续
-rustup target add aarch64-linux-android
-# 验证目标是否安装成功（核心！避免安装失败被忽略）
-if ! rustup target list | grep -q "aarch64-linux-android (installed)"; then
-    echo -e "${RED}Error: aarch64-linux-android target not installed successfully${NC}"
+# 🔧 关键修复2：显式指定工具链安装目标，验证路径
+echo "Adding Android 64-bit target (aarch64-linux-android) to ${ACTIVE_TOOLCHAIN}..."
+# 显式指定工具链安装，避免安装到其他工具链
+rustup target add aarch64-linux-android --toolchain "${ACTIVE_TOOLCHAIN}"
+# 验证目标是否安装成功（更精准的检查）
+if ! rustup target list --toolchain "${ACTIVE_TOOLCHAIN}" | grep -q "aarch64-linux-android (installed)"; then
+    echo -e "${RED}Error: aarch64-linux-android target not installed for ${ACTIVE_TOOLCHAIN}${NC}"
+    echo "Available targets:"
+    rustup target list --toolchain "${ACTIVE_TOOLCHAIN}"
     exit 1
 fi
-echo -e "${GREEN}✅ aarch64-linux-android target installed${NC}"
+# 手动计算 RUSTLIB 路径（核心！告诉cargo build核心库在哪）
+RUSTLIB_PATH="$HOME/.rustup/toolchains/${ACTIVE_TOOLCHAIN}/lib/rustlib/${CARGO_TARGET}"
+if [ ! -d "${RUSTLIB_PATH}" ]; then
+    echo -e "${RED}Error: RUSTLIB path not found: ${RUSTLIB_PATH}${NC}"
+    exit 1
+fi
+export RUSTLIB="${RUSTLIB_PATH}"
+echo -e "${GREEN}✅ RUSTLIB set to: ${RUSTLIB_PATH}${NC}"
 
 # 🔧 仅编译64位，加--verbose便于排错（原作者核心编译逻辑不变）
 echo "Building Letta FFI (64-bit)..."
@@ -54,7 +67,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 补全sysroot，让ld.lld找到系统库
+# 🔧 补全sysroot+RUSTLIB，让cargo build找到核心库和系统库
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -62,13 +75,15 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 设置RUSTFLAGS，传递sysroot给链接器
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib"
-# 执行cargo build，生成头文件
+# 4. 设置RUSTFLAGS，同时传递sysroot和RUSTLIB
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${RUSTLIB_PATH}/lib"
+# 执行cargo build，生成头文件（输出日志便于排查）
+echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
     --target=aarch64-linux-android \
     --profile mobile \
-    --config "target.aarch64-linux-android.linker=\"${LINKER_PATH}\""
+    --config "target.aarch64-linux-android.linker=\"${LINKER_PATH}\"" \
+    --verbose  # 加--verbose，输出详细编译日志
 # 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
     echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
