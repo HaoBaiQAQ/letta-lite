@@ -26,7 +26,6 @@ if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing official cargo-ndk v4.1.2...${NC}"
     cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
 else
-    # Verify if it's the official version (supports --platform)
     if ! cargo ndk --help | grep -q "--platform"; then
         echo -e "${YELLOW}Invalid cargo-ndk found, reinstalling official version...${NC}"
         cargo uninstall cargo-ndk || true
@@ -50,18 +49,16 @@ export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding Android targets..."
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
 
-# Core build (fixed: --platform + -- separator + comment syntax)
+# Core build (彻底消除语法歧义：-- 后直接跟 cargo 命令，无任何注释/空行干扰)
 echo "Building for Android (all architectures)..."
 cargo ndk \
     -t arm64-v8a \
     -t armeabi-v7a \
     -t x86_64 \
     -t x86 \
-    # Target Android API level 21 (matches original author's config)
     --platform 21 \
     -o bindings/android/src/main/jniLibs \
-    -- \ # Separator between cargo-ndk params and cargo commands
-    build -p letta-ffi --profile mobile
+    -- build -p letta-ffi --profile mobile
 
 # Generate and copy C header file
 echo "Generating C header..."
@@ -86,14 +83,12 @@ compile_jni() {
     local api_level=21
     echo "  Building JNI for $arch..."
 
-    # Auto-find Clang path (compatible with different NDK directories)
     CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
     if [ -z "$CLANG_PATH" ]; then
         echo -e "${RED}Error: Clang not found for ${triple}${api_level}${NC}"
         exit 1
     fi
 
-    # Java include path (compatible with common environments)
     local JAVA_INCLUDE="${JAVA_HOME:-/usr/lib/jvm/default-java}/include"
     [ ! -d "$JAVA_INCLUDE" ] && JAVA_INCLUDE="/usr/lib/jvm/java-11-openjdk-amd64/include"
 
