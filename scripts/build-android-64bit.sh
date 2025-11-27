@@ -57,9 +57,9 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     -- build -p letta-ffi --profile mobile
 
-# Generate and copy C header file
+# Generate and copy C header file（核心修复：去掉 --features cbindgen）
 echo "Generating C header..."
-cargo build -p letta-ffi --features cbindgen
+cargo build -p letta-ffi # 去掉无效的 feature 参数
 if [ -f "ffi/include/letta_lite.h" ]; then
     cp ffi/include/letta_lite.h bindings/android/src/main/jni/
 else
