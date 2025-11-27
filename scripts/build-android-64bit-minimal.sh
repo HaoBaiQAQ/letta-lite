@@ -47,16 +47,19 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 补全最后一个工具：链接器（LD），解决格式错误问题
+# 🔧 终极强制配置：用--config指定链接器，优先级最高，解决所有依赖的链接问题
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
 # 2. 归档工具（AR）：打包静态库
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
-# 3. 链接器（LD）：链接目标文件生成最终库（新增！解决file in wrong format）
-export LD_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 执行cargo build，传递所有工具配置
-cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile
+# 3. 强制指定链接器（通过--config，比环境变量优先级高）
+LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
+# 执行cargo build，用--config强制指定链接器，确保所有依赖都用ld.lld
+cargo build -p letta-ffi \
+    --target=aarch64-linux-android \
+    --profile mobile \
+    --config "target.aarch64-linux-android.linker=${LINKER_PATH}"  # 关键！强制链接器
 # 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
     echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
