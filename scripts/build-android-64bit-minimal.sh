@@ -47,11 +47,13 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 最终修复：变量名改对（-换成_），指定编译器路径
+# 🔧 终极修复：同时设置编译器（CC）和归档工具（AR），解决所有工具缺失问题
 echo "Generating C header (aarch64 architecture)..."
-# 正确变量名：CC_aarch64_linux_android（把-换成_），Bash能识别
+# 1. 设置编译器路径（之前已修复变量名）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
-# 执行cargo build，传递正确的编译器路径
+# 2. 设置归档工具（AR）路径，指向NDK的llvm-ar（解决ring库报错）
+export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
+# 3. 执行cargo build，传递所有工具配置
 cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile
 # 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
