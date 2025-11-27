@@ -47,16 +47,16 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 关键修复：指定编译器路径，解决openssl-sys找不到clang的问题
+# 🔧 最终修复：变量名改对（-换成_），指定编译器路径
 echo "Generating C header (aarch64 architecture)..."
-# 显式设置CC_aarch64-linux-android，指向NDK的实际编译器（带API版本）
-export CC_aarch64-linux-android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
-# 执行cargo build，传递编译器路径和OpenSSL配置
+# 正确变量名：CC_aarch64_linux_android（把-换成_），Bash能识别
+export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
+# 执行cargo build，传递正确的编译器路径
 cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile
-# 复制头文件到JNI目录（加容错逻辑）
+# 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
     echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
-    HEAD_FILE=$(find "${{ github.workspace }}/target" -name "letta_lite.h" -type f | head -n 1)
+    HEAD_FILE=$(find "${GITHUB_WORKSPACE}/target" -name "letta_lite.h" -type f | head -n 1)
     if [ -n "$HEAD_FILE" ]; then
         cp "$HEAD_FILE" bindings/android/src/main/jni/
         echo -e "${GREEN}✅ 从$HEAD_FILE找到并复制头文件${NC}"
