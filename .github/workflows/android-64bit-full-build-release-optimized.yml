@@ -4,32 +4,44 @@ jobs:
   build-with-script:
     runs-on: ubuntu-latest
     env:
-      API_LEVEL: 21  # 和脚本一致
-      TARGET: aarch64-linux-android  # 和脚本一致
+      API_LEVEL: 21  # 和脚本一致，不修改
+      TARGET: aarch64-linux-android  # 和脚本一致，不修改
       ANDROID_NDK_VERSION: 27.3.13750724
       RELEASE_DIR: ${{ github.workspace }}/release
 
     steps:
+      ###########################################################################
+      # 1. 拉取源码（必需，脚本需要项目文件）
+      ###########################################################################
       - name: 拉取源码及子模块
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 安装脚本依赖的基础工具
+      ###########################################################################
+      # 2. 安装基础依赖（脚本运行必需，无多余）
+      ###########################################################################
+      - name: 安装脚本依赖工具
         run: |
           sudo apt-get update && sudo apt-get install -y \
-            rustc cargo git findutils make cbindgen openjdk-11-jdk wget curl unzip
+            rustc cargo git findutils make cbindgen openjdk-11-jdk \
+            wget curl unzip
           echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
-          echo "✅ 基础依赖安装完成"
 
+      ###########################################################################
+      # 3. 安装NDK（脚本需要NDK编译器，必需）
+      ###########################################################################
       - name: 安装Android NDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.API_LEVEL }}"
 
-      - name: 验证NDK并传递路径
+      ###########################################################################
+      # 4. 验证NDK（避免脚本找不到NDK，必需）
+      ###########################################################################
+      - name: 验证NDK路径
         run: |
           if [ -z "$ANDROID_NDK_HOME" ]; then
             echo "❌ ANDROID_NDK_HOME未设置"
@@ -41,25 +53,33 @@ jobs:
             exit 1
           fi
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          echo "✅ NDK验证完成"
 
+      ###########################################################################
+      # 5. 配置Rust环境（脚本需要target，必需）
+      ###########################################################################
       - name: 配置Rust目标架构
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           target: ${{ env.TARGET }}
 
+      ###########################################################################
+      # 6. 执行脚本（核心步骤，原封不动运行）
+      ###########################################################################
       - name: 执行编译脚本
         run: |
-          chmod +x ./scripts/build-android-64bit.sh  # 替换为你的脚本实际路径
+          # 替换为你的脚本实际路径（必须确保路径正确）
           SCRIPT_PATH="./scripts/build-android-64bit.sh"
+          chmod +x "$SCRIPT_PATH"
           if [ ! -f "$SCRIPT_PATH" ]; then
             echo "❌ 脚本不存在：$SCRIPT_PATH"
             exit 1
           fi
-          echo "✅ 执行脚本：$SCRIPT_PATH"
           "$SCRIPT_PATH"
 
+      ###########################################################################
+      # 7. 收集产物（可选，方便发布，无语法错误）
+      ###########################################################################
       - name: 收集产物
         run: |
           mkdir -p ${{ env.RELEASE_DIR }}
@@ -68,25 +88,28 @@ jobs:
             echo "❌ 未生成AAR"
             exit 1
           fi
-          # 修复语法错误：用 github.sha[:8] 取前8位哈希
-          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha[:8] }}.aar"
+          # 正确写法：{{ github.sha | substring: 0, 8 }}
+          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring: 0, 8 }}.aar"
           cp "$AAR_SOURCE" "$AAR_DEST"
           SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
           if [ -f "$SO_SOURCE" ]; then
-            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha[:8] }}.so"
+            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring: 0, 8 }}.so"
             cp "$SO_SOURCE" "$SO_DEST"
           fi
-          echo "✅ 产物收集完成"
 
+      ###########################################################################
+      # 8. 发布Releases（可选，无语法错误）
+      ###########################################################################
       - name: 发布到Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-64bit-script-${{ github.sha[:8] }}  # 修复语法错误
+          # 正确写法：{{ github.sha | substring: 0, 8 }}
+          tag_name: android-64bit-script-${{ github.sha | substring: 0, 8 }}
           name: "Letta-Lite Android 64位AAR（脚本编译版）"
           body: |
             - 基于脚本原封不动编译
-            - 自动处理OpenSSL，架构arm64-v8a
-            - 最小支持Android ${{ env.API_LEVEL }}
+            - 架构：arm64-v8a，最小支持Android ${{ env.API_LEVEL }}
+            - 自动处理OpenSSL依赖
           files: |
             ${{ env.RELEASE_DIR }}/*.aar
             ${{ env.RELEASE_DIR }}/*.so
