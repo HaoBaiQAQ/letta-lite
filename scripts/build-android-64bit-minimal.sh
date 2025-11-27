@@ -67,7 +67,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 终极修复：忽略unwind库（panic=abort用不到），完成链接
+# 🔧 终极修复：修正链接器参数语法，忽略unwind库
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -77,8 +77,8 @@ export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
 # 4. 具体系统库路径（架构+API级别）
 NDK_LIB_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
-# 5. 关键添加：忽略unwind库（panic=abort无需栈展开）
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=-Wl,--allow-shlib-undefined"
+# 5. 修正参数：直接传递--allow-shlib-undefined，去掉-Wl,前缀
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=--allow-shlib-undefined"
 # 执行cargo build，生成头文件
 echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
