@@ -27,7 +27,7 @@ if ! cargo ndk --version &> /dev/null; then
     cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
 else
     # 验证是否是官方版本（避免已装错版本）
-    if ! cargo ndk --help | grep -q "--api"; then
+    if ! cargo ndk --help | grep -q "--platform"; then
         echo -e "${YELLOW}Found invalid cargo-ndk, reinstalling official version...${NC}"
         cargo uninstall cargo-ndk || true
         cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
@@ -51,14 +51,14 @@ export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding Android targets..."
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
 
-# Build for all Android architectures（新增--api参数，适配NDK）
+# Build for all Android architectures（核心修复：--api → --platform）
 echo "Building for Android (all architectures)..."
 cargo ndk \
     -t arm64-v8a \
     -t armeabi-v7a \
     -t x86_64 \
     -t x86 \
-    --api 21 \ # 匹配原作者的api_level=21
+    --platform 21 \ # 关键修复：替换--api为--platform，匹配官方参数名
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile
 
