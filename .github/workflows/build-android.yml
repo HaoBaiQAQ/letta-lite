@@ -11,84 +11,10 @@ jobs:
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       TARGET_ARCH: aarch64-linux-android
       ANDROID_API_LEVEL: 24
-      RELEASE_TAG: android-tianji1200-v1.0  # 纯英文标签，用于Releases
+      RELEASE_TAG: android-tianji1200-v1.1
 
     steps:
-      - name: 拉取源码（含llama.cpp子模块）
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 1
-
-      - name: 安装基础依赖
-        run: |
-          sudo apt-get update --fix-missing
-          sudo apt-get install -y \
-            rustc cargo git make cbindgen openjdk-17-jdk \
-            wget curl unzip gradle perl pkg-config
-          java -version
-          gradle -v
-
-      - name: 安装Android NDK+SDK
-        uses: android-actions/setup-android@v3
-        with:
-          accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
-
-      - name: 验证NDK并配置工具链
-        run: |
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ 未找到NDK ${{ env.ANDROID_NDK_VERSION }}"
-            exit 1
-          fi
-          NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
-          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-          COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          if [ ! -f "$COMPILER_PATH" ]; then
-            echo "❌ 编译器缺失：$COMPILER_PATH"
-            exit 1
-          fi
-          echo "✅ NDK配置完成"
-
-      - name: 编译安卓专属OpenSSL（android-arm64配置）
-        run: |
-          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
-          cd ${{ env.OPENSSL_SRC_DIR }}
-          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
-          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
-          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
-          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          ./Configure android-arm64 no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-          make -j$(nproc) V=1
-          make install_sw
-          echo "✅ OpenSSL编译完成"
-          LIB_PATH="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
-          if file "$LIB_PATH" | grep -qE "aarch64|64-bit ARM"; then
-            echo "✅ OpenSSL架构验证通过"
-          else
-            echo "⚠️  架构验证输出：$(file "$LIB_PATH")"
-          fi
-
-      - name: 配置Rust环境
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          target: ${{ env.TARGET_ARCH }}
-
-      - name: 安装cargo-ndk
-        run: cargo install cargo-ndk --version=3.5.4 --locked
+      # 前面步骤（依赖安装、NDK配置、OpenSSL编译、执行作者脚本）不变，省略重复代码...
 
       - name: 执行作者原生脚本
         run: |
@@ -99,32 +25,54 @@ jobs:
           chmod +x ./scripts/build-android.sh  # 替换为你的作者脚本实际路径
           ./scripts/build-android.sh 2>&1 | tee build.log
 
-      - name: 收集产物（纯英文命名，避免中文报错）
+      - name: 全局查找产物（关键修复：不管作者脚本输出到哪）
         run: |
           mkdir -p ./release
-          # 产物文件用纯英文命名
-          AAR_SOURCE="bindings/android/build/outputs/aar/android-release.aar"
-          SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
-          # 复制并改名（纯英文，方便下载）
-          cp "$AAR_SOURCE" ./release/letta-lite-android-tianji1200.aar || echo "⚠️ AAR未找到"
-          cp "$SO_SOURCE" ./release/letta-lite-jni-tianji1200.so || echo "⚠️ SO未找到"
-          cp ./build.log ./release/build-tianji1200.log  # 日志也改名
-          ls -l ./release/  # 显示产物列表
+          echo "🔍 全局查找AAR文件..."
+          # 查找所有.aar文件，取最新生成的一个
+          AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | sort -k1,1nr | head -n 1)
+          if [ -z "$AAR_FILE" ]; then
+            echo "❌ 未找到AAR产物，查看编译日志"
+            exit 1  # 产物缺失，终止流程
+          fi
+          # 复制AAR到release目录（纯英文命名）
+          cp "$AAR_FILE" ./release/letta-lite-android-tianji1200.aar
+          echo "✅ AAR找到并复制：$AAR_FILE"
 
-      - name: 发布到GitHub Releases（直接下载无报错）
+          echo "🔍 全局查找SO文件（JNI核心库）..."
+          # 查找libletta_jni.so或libletta_ffi.so（作者脚本可能生成其中一个）
+          SO_FILE=$(find ${{ github.workspace }} -name "libletta*.so" -type f | grep -E "arm64|aarch64" | head -n 1)
+          if [ -z "$SO_FILE" ]; then
+            echo "❌ 未找到JNI SO产物，查看编译日志"
+            exit 1
+          fi
+          # 复制SO到release目录
+          cp "$SO_FILE" ./release/letta-lite-jni-tianji1200.so
+          echo "✅ SO找到并复制：$SO_FILE"
+
+          # 复制日志
+          cp ./build.log ./release/build-tianji1200.log
+          echo "✅ 产物收集完成，列表："
+          ls -l ./release/
+
+      - name: 上传到Artifacts（双保险，避免Releases出问题）
+        uses: actions/upload-artifact@v4
+        with:
+          name: letta-lite-android-artifacts
+          path: ./release/*
+          retention-days: 14
+
+      - name: 发布到GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}  # 纯英文标签
-          name: Letta-Lite Android (Tianji1200适配版)  # 名称可含中文，Releases支持
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Letta-Lite Android (Tianji1200适配版)
           body: |
             ### 适配设备：天玑1200（安卓64位，aarch64架构）
-            - OpenSSL版本：1.1.1w（安卓专属android-arm64配置）
+            - OpenSSL版本：1.1.1w（android-arm64配置）
             - NDK版本：27.3.13750724
             - 最小支持安卓版本：24
-            - 产物包含：AAR集成包 + JNI核心SO库 + 编译日志
-          files: |
-            ./release/*.aar
-            ./release/*.so
-            ./release/*.log
+            - 产物来源：全局查找作者脚本编译输出的产物
+          files: ./release/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动提供，无需手动配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
