@@ -20,6 +20,7 @@ check_command() {
 check_command rustup
 check_command cargo
 check_command git
+check_command find
 
 # Install official cargo-ndk from GitHub (avoid Crates.io conflict)
 if ! cargo ndk --version &> /dev/null; then
@@ -45,26 +46,45 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 仅添加64位目标架构（arm64-v8a）
-echo "Adding Android 64-bit target (arm64-v8a)..."
-rustup target add aarch64-linux-android || true
+# 🔴 核心修复：设置交叉编译环境变量，强制依赖按 arm64-v8a 编译
+export TARGET=aarch64-linux-android
+export API_LEVEL=21
 
-# 核心编译：仅编译arm64-v8a，避免多架构OpenSSL冲突
+# 1. 指定目标架构的链接器（使用 NDK 提供的 aarch64 链接器）
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "aarch64-linux-android${API_LEVEL}-clang" | head -1)
+if [ -z "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" ]; then
+    echo -e "${RED}Error: 找不到 arm64-v8a 链接器${NC}"
+    exit 1
+fi
+
+# 2. 强制 openssl-sys 按 Android 架构编译（禁用系统 OpenSSL，使用交叉编译版本）
+export OPENSSL_STATIC=1
+export OPENSSL_DIR="$NDK_HOME/sysroot/usr" # 使用 NDK 自带的 OpenSSL 头文件和库
+export OPENSSL_NO_VENDOR=0 # 允许 openssl-sys 自动适配 Android
+
+# 3. 其他依赖交叉编译配置（确保所有 Rust 依赖按目标架构编译）
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C target-feature=-crt-static -L $NDK_HOME/sysroot/usr/lib/aarch64-linux-android/$API_LEVEL"
+
+# 仅添加64位目标架构（arm64-v8a）
+echo "Adding Android 64-bit target (aarch64-linux-android)..."
+rustup target add $TARGET || true
+
+# 核心编译：明确指定目标架构，双重锁定
 echo "Building for Android 64-bit (arm64-v8a)..."
 cargo ndk \
-    -t arm64-v8a \
-    --platform 21 \
+    -t $TARGET \
+    --platform $API_LEVEL \
     -o bindings/android/src/main/jniLibs \
-    -- build -p letta-ffi --profile mobile
+    -- build -p letta-ffi --profile mobile --target $TARGET
 
-# Generate and copy C header file（核心修复：去掉 --features cbindgen）
+# Generate and copy C header file（去掉无效的 --features cbindgen）
 echo "Generating C header..."
-cargo build -p letta-ffi # 去掉无效的 feature 参数
+cargo build -p letta-ffi --target $TARGET
 if [ -f "ffi/include/letta_lite.h" ]; then
     cp ffi/include/letta_lite.h bindings/android/src/main/jni/
 else
-    echo -e "${RED}Error: letta_lite.h not found in ffi/include/${NC}"
-    exit 1
+    echo -e "${YELLOW}Warning: letta_lite.h 未找到，尝试用 cbindgen 直接生成${NC}"
+    cbindgen --config ffi/cbindgen.toml --output bindings/android/src/main/jni/letta_lite.h ffi/src/
 fi
 
 # 仅编译64位JNI wrapper（arm64-v8a）
@@ -74,17 +94,17 @@ mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 compile_jni() {
     local arch=$1
     local triple=$2
-    local api_level=21
+    local api_level=$3
     echo "  Building JNI for $arch (API $api_level)..."
 
-    # 自动查找arm64-v8a对应的Clang路径
+    # 自动查找 arm64-v8a 对应的 Clang 路径
     CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
     if [ -z "$CLANG_PATH" ]; then
         echo -e "${RED}Error: Clang not found for ${triple}${api_level}${NC}"
         exit 1
     fi
 
-    # Java include路径兼容
+    # Java include 路径兼容
     local JAVA_INCLUDE="${JAVA_HOME:-/usr/lib/jvm/default-java}/include"
     [ ! -d "$JAVA_INCLUDE" ] && JAVA_INCLUDE="/usr/lib/jvm/java-11-openjdk-amd64/include"
 
@@ -92,19 +112,20 @@ compile_jni() {
         -I"$JAVA_INCLUDE" \
         -I"$JAVA_INCLUDE/linux" \
         -I"$NDK_HOME/sysroot/usr/include" \
-        -I"ffi/include" \
+        -I"bindings/android/src/main/jni" \ # 直接使用生成的头文件路径
         -shared -fPIC \
         -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/${arch}" \
         -lletta_ffi \
         -llog \
-        -ldl
+        -ldl \
+        -L"$NDK_HOME/sysroot/usr/lib/aarch64-linux-android/$api_level" # 链接 NDK 的系统库
 }
 
-# 仅编译arm64-v8a的JNI
+# 仅编译 arm64-v8a 的 JNI
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
-    compile_jni "arm64-v8a" "aarch64-linux-android"
+    compile_jni "arm64-v8a" "aarch64-linux-android" $API_LEVEL
 else
     echo -e "${RED}Error: JNI source file (letta_jni.c) not found${NC}"
     exit 1
@@ -139,5 +160,5 @@ echo "2. Add to app/build.gradle:"
 echo "   dependencies {"
 echo "       implementation files('libs/android-release.aar')"
 echo "   }"
-echo "3. Ensure minSdkVersion ≥ 21"
+echo "3. Ensure minSdkVersion ≥ $API_LEVEL"
 echo "4. Import in Kotlin: import ai.letta.lite.LettaLite"
