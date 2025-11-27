@@ -25,11 +25,11 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 关键步骤1：卸载假的 cargo-ndk（v4.1.2），安装真的 cargo-ndk（0.11.0，支持 Android）
-echo "Uninstalling wrong cargo-ndk (v4.1.2) and installing correct one..."
+# 关键步骤1：卸载假的 cargo-ndk（若存在），安装官方 Android 专用 cargo-ndk（最新稳定版）
+echo "Uninstalling wrong cargo-ndk (if any) and installing official one..."
 cargo uninstall cargo-ndk 2>/dev/null || echo -e "${YELLOW}No wrong cargo-ndk found, proceeding...${NC}"
-# 安装正确的版本（0.11.0，官方稳定版，支持 --api 或环境变量）
-cargo install cargo-ndk@0.11.0 --force
+# 修正：不指定错误版本号，直接安装官方最新稳定版（自动识别正确的包）
+cargo install cargo-ndk --force
 
 # 切换到 Nightly 工具链
 echo "Installing and switching to Nightly Rust toolchain..."
