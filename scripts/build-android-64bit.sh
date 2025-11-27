@@ -9,8 +9,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 定义关键变量
+# 关键：指定 Nightly 工具链（支持所有必要特性，且稳定传递 --rustflags）
 TARGET_ARCH="aarch64-linux-android"
+RUST_TOOLCHAIN="nightly"
 
 # 检查必需工具
 check_command() {
@@ -22,6 +23,11 @@ check_command() {
 
 check_command rustup
 check_command cargo
+
+# 安装并切换到 Nightly 工具链（解决特性支持问题）
+echo "Installing and switching to Nightly Rust toolchain..."
+rustup install "$RUST_TOOLCHAIN"
+rustup default "$RUST_TOOLCHAIN"
 
 # 检查并安装cargo-ndk
 if ! cargo ndk --version &> /dev/null; then
@@ -41,13 +47,18 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（简化命令，无--rustflags，从Cargo.toml读取配置）
-echo "Building for Android ($TARGET_ARCH)..."
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile
+# 核心修复：用单引号包裹 --rustflags 的值，避免 shell 拆分；用 +nightly 指定工具链
+echo "Building for Android ($TARGET_ARCH) with Nightly toolchain..."
+NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
+LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
 
-# 生成C头文件
+# 正确命令：单引号包裹 --rustflags 值，确保完整传递；-- 分隔参数
+cargo +"$RUST_TOOLCHAIN" ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --rustflags '-L '"$NDK_SYSROOT/aarch64-linux-android"' -L '"$LLVM_LIB_PATH"' -L '"$OPENSSL_PATH"' -llog -lunwind'
+
+# 生成C头文件（用 Nightly 工具链）
 echo "Generating C header (for $TARGET_ARCH)..."
-cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
+cargo +"$RUST_TOOLCHAIN" build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 编译64位JNI wrapper（显式链接系统库）
