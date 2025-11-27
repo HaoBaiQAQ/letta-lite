@@ -42,12 +42,12 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（关键修复：用 -- 分隔 cargo-ndk 和 cargo build 的参数）
+# 编译核心库（关键修复：-- 移到 build 前面，正确分隔参数）
 echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-# 格式：cargo ndk [自身参数] build -- [cargo build 参数]
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -- -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
+# 正确格式：cargo ndk [ndk参数] -- build [cargo参数]
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
 # 生成C头文件（格式正确）
 echo "Generating C header (for $TARGET_ARCH)..."
