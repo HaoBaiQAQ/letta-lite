@@ -1,6 +1,6 @@
 name: 迎合脚本版：编译+发布Android 64位AAR
 on:
-  workflow_dispatch:  # 手动触发（必选，无语法问题）
+  workflow_dispatch:
   push:
     branches: [main]
 jobs:
@@ -19,15 +19,20 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 安装脚本依赖工具
+      - name: 安装脚本依赖工具（JDK 11，兼容 setup-android@v2）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo git findutils make cbindgen openjdk-11-jdk \
             wget curl unzip
           echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
 
-      - name: 安装Android NDK
-        uses: android-actions/setup-android@v3
+      # 🔴 当前用 v2 回退，快速恢复运行（之前能跑的版本）
+      # 📌 以后想升级到 v3，按以下步骤改：
+      # 1. 把下面的 @v2 改成 @v3
+      # 2. 把上面的 JDK 安装改成：openjdk-17-jdk
+      # 3. 把上面的 JAVA_HOME 改成：/usr/lib/jvm/java-17-openjdk-amd64
+      - name: 安装Android NDK（用 v2 兼容 JDK 11）
+        uses: android-actions/setup-android@v2  # 回退到 v2，解决 JDK 版本冲突
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.API_LEVEL }}"
@@ -53,7 +58,7 @@ jobs:
 
       - name: 执行编译脚本
         run: |
-          SCRIPT_PATH="./scripts/build-android-64bit.sh"  # 替换为你的脚本实际路径
+          SCRIPT_PATH="./scripts/build-android-64bit.sh"
           chmod +x "$SCRIPT_PATH"
           if [ ! -f "$SCRIPT_PATH" ]; then
             echo "❌ 脚本不存在：$SCRIPT_PATH"
@@ -61,7 +66,7 @@ jobs:
           fi
           "$SCRIPT_PATH"
 
-      - name: 收集产物（无复杂表达式）
+      - name: 收集产物
         run: |
           mkdir -p ${{ env.RELEASE_DIR }}
           AAR_SOURCE="bindings/android/build/outputs/aar/android-release.aar"
@@ -69,7 +74,6 @@ jobs:
             echo "❌ 未生成AAR"
             exit 1
           fi
-          # 产物名称用固定前缀，无哈希截取，避免语法错误
           AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit.aar"
           cp "$AAR_SOURCE" "$AAR_DEST"
           SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
@@ -78,10 +82,10 @@ jobs:
             cp "$SO_SOURCE" "$SO_DEST"
           fi
 
-      - name: 发布到Releases（无复杂表达式）
+      - name: 发布到Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-64bit-latest  # 固定标签，无哈希
+          tag_name: android-64bit-latest
           name: "Letta-Lite Android 64位AAR（最新版）"
           body: |
             - 基于脚本原封不动编译
