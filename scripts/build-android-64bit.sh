@@ -9,11 +9,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 核心配置（关键：指定 Android API 级别为 33，匹配 NDK 27 支持的版本）
+# 核心配置（简化：指定 API 24，兼容性更广，NDK 必支持）
 TARGET_ARCH="aarch64-linux-android"
 RUST_TOOLCHAIN="nightly"
 FFI_MANIFEST_PATH="ffi/Cargo.toml"
-ANDROID_API_LEVEL="33" # NDK 27 支持的稳定 API 级别，库文件存在
+ANDROID_API_LEVEL="24" #  Android 7.0，所有 NDK 版本都支持，避免 API 不匹配
 
 # 检查必需工具
 check_command() {
@@ -37,7 +37,7 @@ if ! cargo ndk --version &> /dev/null; then
     cargo install cargo-ndk
 fi
 
-# 检查NDK路径环境变量
+# 检查NDK路径环境变量（只确认NDK存在，不手动检查子路径）
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
     echo "Please set one of these environment variables to your Android NDK path"
@@ -45,39 +45,29 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 关键：验证 NDK platforms 路径是否存在（避免路径错误）
-NDK_PLATFORM_PATH="$NDK_HOME/platforms/android-$ANDROID_API_LEVEL/arch-arm64/usr/lib"
-if [ ! -d "$NDK_PLATFORM_PATH" ]; then
-    echo -e "${RED}Error: NDK platform path not found: $NDK_PLATFORM_PATH${NC}"
-    echo "Please check if Android API level $ANDROID_API_LEVEL is supported by your NDK"
-    exit 1
-fi
-
 # 只添加64位目标架构
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 终极修正：RUSTFLAGS 指向 NDK platforms 目录（库实际所在位置）+ sysroot 目录
-echo "Setting RUSTFLAGS environment variable (正确的库路径)..."
-NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
+# 简化 RUSTFLAGS：只保留 sysroot 核心路径，让 cargo ndk 自动适配平台库
+echo "Setting RUSTFLAGS environment variable..."
+NDK_SYSROOT_AARCH64="$NDK_HOME/sysroot/usr/lib/aarch64-linux-android" # NDK 必有的路径
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
 OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
 
-# 核心：添加 NDK_PLATFORM_PATH（liblog.so 和 libunwind.so 实际所在路径）
 export RUSTFLAGS="\
--L $NDK_PLATFORM_PATH \
--L $NDK_SYSROOT/aarch64-linux-android \
+-L $NDK_SYSROOT_AARCH64 \
 -L $LLVM_LIB_PATH \
 -L $OPENSSL_PATH \
 -llog \
 -lunwind \
 "
 
-# 编译核心库（添加 --api $ANDROID_API_LEVEL，匹配库路径的 API 级别）
+# 编译核心库（依赖 cargo ndk 自动处理平台库路径，指定 API 24）
 echo "Building for Android ($TARGET_ARCH, API $ANDROID_API_LEVEL)..."
 cargo +"$RUST_TOOLCHAIN" ndk \
     -t "$TARGET_ARCH" \
-    --api "$ANDROID_API_LEVEL" \ # 关键：指定 API 级别，cargo ndk 会自动适配
+    --api "$ANDROID_API_LEVEL" \ # 指定兼容 API，cargo ndk 自动找对应库
     -o bindings/android/src/main/jniLibs \
     -- build \
         --manifest-path "$FFI_MANIFEST_PATH" \
@@ -115,7 +105,7 @@ compile_jni() {
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/$arch" \
         -lletta_ffi \
-        -L"$NDK_PLATFORM_PATH" \ # JNI 编译也需要正确的库路径
+        -L"$NDK_SYSROOT_AARCH64" \ # 用 sysroot 路径找库
         -llog \
         -lunwind
 }
