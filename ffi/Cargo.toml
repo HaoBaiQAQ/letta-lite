@@ -21,3 +21,14 @@ libc = "0.2"
 
 [build-dependencies]
 cbindgen = "0.26"
+
+[profile.mobile.rustflags]
+# Android 系统库路径（匹配 NDK 27 的 aarch64 架构目录）
+"-L" = "/usr/local/lib/android/sdk/ndk/27.3.13750724/sysroot/usr/lib/aarch64-linux-android"
+# LLVM 补充库路径（解决 libunwind.so 链接问题）
+"-L" = "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+# 64位 OpenSSL 静态库路径（之前编译的依赖库）
+"-L" = "/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
+# 显式链接 Android 核心系统库（避免链接时找不到）
+"-l" = "log"
+"-l" = "unwind"
