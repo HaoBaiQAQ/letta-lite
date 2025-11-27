@@ -21,6 +21,7 @@ check_command rustup
 check_command cargo
 check_command git
 check_command find
+check_command make # 新增：openssl-sys编译需要make工具
 
 # Install official cargo-ndk from GitHub (avoid Crates.io conflict)
 if ! cargo ndk --version &> /dev/null; then
@@ -46,30 +47,37 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 🔴 核心修复：设置交叉编译环境变量，强制依赖按 arm64-v8a 编译
+# 🔴 核心纠错：配置openssl-sys自动编译Android版OpenSSL（Vendor模式）
 export TARGET=aarch64-linux-android
 export API_LEVEL=21
 
-# 1. 指定目标架构的链接器（使用 NDK 提供的 aarch64 链接器）
+# 1. 启用Vendor模式：让openssl-sys自动下载并编译OpenSSL源码
+export OPENSSL_NO_VENDOR=0 # 关键：禁用系统OpenSSL，启用自动编译
+export OPENSSL_STATIC=1 # 编译静态库，避免依赖系统动态库
+
+# 2. 告诉openssl-sys Android交叉编译工具链（NDK提供）
+export ANDROID_NDK_ROOT="$NDK_HOME"
+export ANDROID_API_LEVEL="$API_LEVEL"
+export ANDROID_TARGET="$TARGET"
+
+# 3. 指定目标架构的链接器和编译器（确保依赖按arm64-v8a编译）
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "aarch64-linux-android${API_LEVEL}-clang" | head -1)
-if [ -z "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" ]; then
-    echo -e "${RED}Error: 找不到 arm64-v8a 链接器${NC}"
+export CC_aarch64_linux_android=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "aarch64-linux-android${API_LEVEL}-clang" | head -1)
+export CXX_aarch64_linux_android=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "aarch64-linux-android${API_LEVEL}-clang++" | head -1)
+
+if [ -z "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" ] || [ -z "$CC_aarch64_linux_android" ]; then
+    echo -e "${RED}Error: 找不到Android arm64-v8a编译器/链接器${NC}"
     exit 1
 fi
 
-# 2. 强制 openssl-sys 按 Android 架构编译（禁用系统 OpenSSL，使用交叉编译版本）
-export OPENSSL_STATIC=1
-export OPENSSL_DIR="$NDK_HOME/sysroot/usr" # 使用 NDK 自带的 OpenSSL 头文件和库
-export OPENSSL_NO_VENDOR=0 # 允许 openssl-sys 自动适配 Android
-
-# 3. 其他依赖交叉编译配置（确保所有 Rust 依赖按目标架构编译）
+# 4. 额外Rustflags：确保链接Android系统库
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C target-feature=-crt-static -L $NDK_HOME/sysroot/usr/lib/aarch64-linux-android/$API_LEVEL"
 
 # 仅添加64位目标架构（arm64-v8a）
-echo "Adding Android 64-bit target (aarch64-linux-android)..."
+echo "Adding Android 64-bit target ($TARGET)..."
 rustup target add $TARGET || true
 
-# 核心编译：明确指定目标架构，双重锁定
+# 核心编译：明确目标架构，让所有依赖按arm64-v8a编译
 echo "Building for Android 64-bit (arm64-v8a)..."
 cargo ndk \
     -t $TARGET \
@@ -77,13 +85,12 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     -- build -p letta-ffi --profile mobile --target $TARGET
 
-# Generate and copy C header file（去掉无效的 --features cbindgen）
+# Generate and copy C header file（容错：自动生成头文件）
 echo "Generating C header..."
-cargo build -p letta-ffi --target $TARGET
 if [ -f "ffi/include/letta_lite.h" ]; then
     cp ffi/include/letta_lite.h bindings/android/src/main/jni/
 else
-    echo -e "${YELLOW}Warning: letta_lite.h 未找到，尝试用 cbindgen 直接生成${NC}"
+    echo -e "${YELLOW}letta_lite.h 未找到，用cbindgen直接生成...${NC}"
     cbindgen --config ffi/cbindgen.toml --output bindings/android/src/main/jni/letta_lite.h ffi/src/
 fi
 
@@ -97,14 +104,12 @@ compile_jni() {
     local api_level=$3
     echo "  Building JNI for $arch (API $api_level)..."
 
-    # 自动查找 arm64-v8a 对应的 Clang 路径
     CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
     if [ -z "$CLANG_PATH" ]; then
         echo -e "${RED}Error: Clang not found for ${triple}${api_level}${NC}"
         exit 1
     fi
 
-    # Java include 路径兼容
     local JAVA_INCLUDE="${JAVA_HOME:-/usr/lib/jvm/default-java}/include"
     [ ! -d "$JAVA_INCLUDE" ] && JAVA_INCLUDE="/usr/lib/jvm/java-11-openjdk-amd64/include"
 
@@ -112,7 +117,7 @@ compile_jni() {
         -I"$JAVA_INCLUDE" \
         -I"$JAVA_INCLUDE/linux" \
         -I"$NDK_HOME/sysroot/usr/include" \
-        -I"bindings/android/src/main/jni" \ # 直接使用生成的头文件路径
+        -I"bindings/android/src/main/jni" \
         -shared -fPIC \
         -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
         bindings/android/src/main/jni/letta_jni.c \
@@ -120,10 +125,10 @@ compile_jni() {
         -lletta_ffi \
         -llog \
         -ldl \
-        -L"$NDK_HOME/sysroot/usr/lib/aarch64-linux-android/$api_level" # 链接 NDK 的系统库
+        -L"$NDK_HOME/sysroot/usr/lib/aarch64-linux-android/$api_level"
 }
 
-# 仅编译 arm64-v8a 的 JNI
+# 仅编译arm64-v8a的JNI
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android" $API_LEVEL
 else
