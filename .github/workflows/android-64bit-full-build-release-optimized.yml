@@ -1,155 +1,111 @@
-#!/usr/bin/env bash
-set -euo pipefail
+name: 官方脚本64位版：编译+发布AAR
+on: [workflow_dispatch, push]
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: 27.3.13750724
+      RELEASE_DIR: ${{ github.workspace }}/release
+      TARGET_ARCH: aarch64-linux-android
 
-echo "Building Letta Lite for Android..."
+    steps:
+      ###########################################################################
+      # 1. 拉取源码+全量子模块
+      ###########################################################################
+      - name: 拉取源码及子模块
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+      ###########################################################################
+      # 2. 补全依赖+关键：设置编译器路径
+      ###########################################################################
+      - name: 安装基础依赖
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            rustc cargo openjdk-11-jdk unzip wget curl cmake make gcc \
+            pkg-config libssl-dev zlib1g-dev binutils android-sdk-platform-tools-common
 
-# Check for required tools
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        echo -e "${RED}Error: $1 is not installed${NC}"
-        exit 1
-    fi
-}
+      - name: 安装Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
 
-check_command rustup
-check_command cargo
-check_command git # 新增：确保git存在（后续从GitHub安装需要）
+      - name: 配置Android 64位编译器路径（关键修复）
+        run: |
+          # 找到NDK里的64位编译器路径
+          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # 告诉cargo，aarch64架构的编译器是哪个
+          echo "CC_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          echo "CXX_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang++" >> $GITHUB_ENV
+          # 把编译器路径加入系统PATH
+          echo "$CLANG_PATH" >> $GITHUB_PATH
 
-# 修复：从官方GitHub安装cargo-ndk（避开Crates.io，装支持--api的真版本）
-if ! cargo ndk --version &> /dev/null; then
-    echo -e "${YELLOW}Installing official cargo-ndk from GitHub...${NC}"
-    cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
-else
-    # 验证是否是官方版本（避免已装错版本）
-    if ! cargo ndk --help | grep -q "--api"; then
-        echo -e "${YELLOW}Found invalid cargo-ndk, reinstalling official version...${NC}"
-        cargo uninstall cargo-ndk || true
-        cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
-    fi
-fi
+      - name: 编译64位OpenSSL（补官方脚本依赖）
+        run: |
+          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p openssl-src openssl-install
+          cd openssl-src
+          wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+          tar -xvzf openssl-1.1.1w.tar.gz --strip-components=1
+          export CC="$CLANG_PATH/aarch64-linux-android24-clang"
+          export AR="$CLANG_PATH/llvm-ar"
+          ./Configure linux-aarch64 no-shared no-asm --prefix=${{ github.workspace }}/openssl-install -fPIC
+          make -j$(nproc) && make install_sw
+          # 传入OpenSSL路径给官方脚本
+          echo "OPENSSL_DIR=${{ github.workspace }}/openssl-install" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
-# Check NDK_HOME or ANDROID_NDK_HOME
-if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
-    echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
-    echo "Please set one of these environment variables to your Android NDK path"
-    exit 1
-fi
-export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
+      ###########################################################################
+      # 3. 执行修改后的官方脚本（仅64位）
+      ###########################################################################
+      - name: 运行64位官方构建脚本
+        run: |
+          # 配置NDK路径
+          export NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          # 给脚本加执行权限
+          chmod +x ./scripts/build-android-64bit.sh
+          # 运行官方脚本（所有编译、AAR生成逻辑都在里面）
+          ./scripts/build-android-64bit.sh
 
-# Add Android targets if not already added
-echo "Adding Android targets..."
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
+      ###########################################################################
+      # 4. 复制产物到发布目录
+      ###########################################################################
+      - name: 复制AAR和核心.so
+        run: |
+          mkdir -p ${{ env.RELEASE_DIR }}
+          # 复制官方生成的AAR（官方脚本的输出路径）
+          cp ./bindings/android/build/outputs/aar/android-release.aar ${{ env.RELEASE_DIR }}/letta-lite-official.aar
+          # 复制核心.so（备用）
+          cp ./bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so ${{ env.RELEASE_DIR }}/letta-lite-official.so
+          echo "✅ 产物复制完成："
+          ls -la ${{ env.RELEASE_DIR }}
 
-# Build for all Android architectures（新增--api参数，适配NDK）
-echo "Building for Android (all architectures)..."
-cargo ndk \
-    -t arm64-v8a \
-    -t armeabi-v7a \
-    -t x86_64 \
-    -t x86 \
-    --api 21 \ # 匹配原作者的api_level=21
-    -o bindings/android/src/main/jniLibs \
-    build -p letta-ffi --profile mobile
+      ###########################################################################
+      # 5. 发布到GitHub Releases
+      ###########################################################################
+      - name: 发布到Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Letta-Lite Android 64位官方AAR ${{ github.ref_name }}"
+          body: |
+            ### 核心特点
+            - 基于官方`build-android.sh`脚本修改，仅保留64位（arm64-v8a）
+            - 包含完整核心功能：Agent/记忆管理/本地LLM/云同步
+            - 自动生成AAR，可直接集成到Android项目
 
-# Generate header file
-echo "Generating C header..."
-cargo build -p letta-ffi --features cbindgen
-if [ -f "ffi/include/letta_lite.h" ]; then
-    cp ffi/include/letta_lite.h bindings/android/src/main/jni/
-else
-    echo -e "${RED}Error: letta_lite.h not found, cannot copy to JNI folder${NC}"
-    exit 1
-fi
-
-# Compile JNI wrapper
-echo "Compiling JNI wrapper..."
-
-# Create output directories
-mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
-mkdir -p bindings/android/src/main/jniLibs/armeabi-v7a
-mkdir -p bindings/android/src/main/jniLibs/x86_64
-mkdir -p bindings/android/src/main/jniLibs/x86
-
-# Build JNI wrapper for each architecture（修复Clang路径匹配，兼容不同NDK目录）
-compile_jni() {
-    local arch=$1
-    local triple=$2
-    local api_level=21
-    
-    echo "  Building JNI for $arch..."
-    
-    # 修复：精准匹配Clang路径（避免多prebuilt目录导致的错误）
-    CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
-    if [ -z "$CLANG_PATH" ]; then
-        echo -e "${RED}Error: Clang not found for $triple$api_level${NC}"
-        exit 1
-    fi
-    
-    "$CLANG_PATH" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default-java}/include" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default-java}/include/linux" \
-        -I"${NDK_HOME}/sysroot/usr/include" \
-        -Iffi/include \
-        -shared \
-        -fPIC \
-        -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
-        bindings/android/src/main/jni/letta_jni.c \
-        -L"bindings/android/src/main/jniLibs/${arch}" \
-        -lletta_ffi \
-        -llog \ # 新增：链接Android日志库，避免运行时缺失
-        -ldl
-}
-
-# Only compile JNI if the C file exists
-if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
-    compile_jni "arm64-v8a" "aarch64-linux-android"
-    compile_jni "armeabi-v7a" "armv7a-linux-androideabi"
-    compile_jni "x86_64" "x86_64-linux-android"
-    compile_jni "x86" "i686-linux-android"
-else
-    echo -e "${RED}Error: JNI wrapper (letta_jni.c) not found, cannot compile${NC}"
-    exit 1
-fi
-
-# Build AAR if gradle is available
-if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
-    echo "Building Android AAR..."
-    cd bindings/android
-    if [ -f "gradlew" ]; then
-        chmod +x gradlew
-        ./gradlew clean assembleRelease --no-daemon
-    else
-        gradle clean assembleRelease
-    fi
-    cd ../..
-    
-    AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
-    if [ -f "$AAR_PATH" ]; then
-        echo -e "${GREEN}Android build complete!${NC}"
-        echo ""
-        echo "AAR location: $AAR_PATH"
-    else
-        echo -e "${RED}Error: AAR file not generated${NC}"
-        exit 1
-    fi
-else
-    echo -e "${GREEN}Android libraries built!${NC}"
-    echo ""
-    echo "Libraries location: bindings/android/src/main/jniLibs/"
-fi
-
-echo ""
-echo "To use in your Android project:"
-echo "1. Add the AAR file to your project's libs folder"
-echo "2. Add to your app's build.gradle:"
-echo "   dependencies {"
-echo "       implementation files('libs/android-release.aar')"
-echo "   }"
-echo "3. Ensure minSdkVersion ≥ 21"
-echo "4. Import in Kotlin: import ai.letta.lite.LettaLite"
+            ### 集成步骤
+            1. 复制AAR到项目app/libs目录
+            2. build.gradle添加依赖：implementation files('libs/letta-lite-official.aar')
+            3. Kotlin调用：import ai.letta.lite.LettaLite → LettaLite.createDefault()
+          files: |
+            ${{ env.RELEASE_DIR }}/letta-lite-official.aar
+            ${{ env.RELEASE_DIR }}/letta-lite-official.so
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
