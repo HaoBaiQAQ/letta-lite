@@ -68,18 +68,18 @@ jobs:
             echo "❌ 未生成AAR"
             exit 1
           fi
-          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring: 0, 8 }}.aar"
+          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring:0,8 }}.aar"
           cp "$AAR_SOURCE" "$AAR_DEST"
           SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
           if [ -f "$SO_SOURCE" ]; then
-            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring: 0, 8 }}.so"
+            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring:0,8 }}.so"
             cp "$SO_SOURCE" "$SO_DEST"
           fi
 
       - name: 发布到Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-64bit-script-${{ github.sha | substring: 0, 8 }}
+          tag_name: android-64bit-script-${{ github.sha | substring:0,8 }}
           name: "Letta-Lite Android 64位AAR（脚本编译版）"
           body: |
             - 基于脚本原封不动编译
