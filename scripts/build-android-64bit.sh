@@ -12,7 +12,6 @@ NC='\033[0m' # No Color
 # 核心配置
 TARGET_ARCH="aarch64-linux-android"
 RUST_TOOLCHAIN="nightly"
-# 显式指定目标包的 manifest 路径（解决工作区参数传递问题）
 FFI_MANIFEST_PATH="ffi/Cargo.toml"
 
 # 检查必需工具
@@ -49,23 +48,23 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 核心修复：
-# 1. 显式指定 --manifest-path（工作区参数传递）
-# 2. 用 \ 转义空格（双重保护，避免引号被剥离后拆分）
-# 3. 显式指定 --target（确保编译目标一致）
-echo "Building for Android ($TARGET_ARCH) with Nightly toolchain..."
-NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
+# 终极方案：用 RUSTFLAGS 环境变量直接传递（绕开所有中间工具的参数传递）
+echo "Setting RUSTFLAGS environment variable (直接给编译器的小纸条)..."
+export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
 OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
 
-# 正确命令：所有空格用 \ 转义，显式指定 --manifest-path 和 --target
+# 直接设置环境变量，编译器会自动读取，不用命令行传递
+export RUSTFLAGS="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH -L $OPENSSL_PATH -llog -lunwind"
+
+# 编译核心库（没有 --rustflags 参数了！环境变量已传递）
+echo "Building for Android ($TARGET_ARCH)..."
 cargo +"$RUST_TOOLCHAIN" ndk -t "$TARGET_ARCH" -o bindings/android/src/main/jniLibs -- build \
     --manifest-path "$FFI_MANIFEST_PATH" \
     --profile mobile \
-    --target "$TARGET_ARCH" \
-    --rustflags "-L\ $NDK_SYSROOT/aarch64-linux-android -L\ $LLVM_LIB_PATH -L\ $OPENSSL_PATH -llog -lunwind"
+    --target "$TARGET_ARCH"
 
-# 生成C头文件（显式指定 manifest 和 target）
+# 生成C头文件
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo +"$RUST_TOOLCHAIN" build \
     --manifest-path "$FFI_MANIFEST_PATH" \
