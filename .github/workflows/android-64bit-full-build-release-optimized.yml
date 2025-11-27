@@ -19,20 +19,16 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: 安装脚本依赖工具（JDK 11，兼容 setup-android@v2）
+      - name: 安装脚本依赖工具（保留JDK 11，之前能跑的版本）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo git findutils make cbindgen openjdk-11-jdk \
             wget curl unzip
           echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
 
-      # 🔴 当前用 v2 回退，快速恢复运行（之前能跑的版本）
-      # 📌 以后想升级到 v3，按以下步骤改：
-      # 1. 把下面的 @v2 改成 @v3
-      # 2. 把上面的 JDK 安装改成：openjdk-17-jdk
-      # 3. 把上面的 JAVA_HOME 改成：/usr/lib/jvm/java-17-openjdk-amd64
-      - name: 安装Android NDK（用 v2 兼容 JDK 11）
-        uses: android-actions/setup-android@v2  # 回退到 v2，解决 JDK 版本冲突
+      # 🔴 关键修复：用v1版本（兼容JDK 11，支持packages参数）
+      - name: 安装Android NDK（用setup-android@v1，之前能跑的版本）
+        uses: android-actions/setup-android@v1
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.API_LEVEL }}"
@@ -56,9 +52,9 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET }}
 
-      - name: 执行编译脚本
+      - name: 执行编译脚本（你的原脚本，原封不动）
         run: |
-          SCRIPT_PATH="./scripts/build-android-64bit.sh"
+          SCRIPT_PATH="./scripts/build-android-64bit.sh"  # 确保路径正确
           chmod +x "$SCRIPT_PATH"
           if [ ! -f "$SCRIPT_PATH" ]; then
             echo "❌ 脚本不存在：$SCRIPT_PATH"
@@ -66,7 +62,7 @@ jobs:
           fi
           "$SCRIPT_PATH"
 
-      - name: 收集产物
+      - name: 收集产物（无复杂表达式，避免语法错误）
         run: |
           mkdir -p ${{ env.RELEASE_DIR }}
           AAR_SOURCE="bindings/android/build/outputs/aar/android-release.aar"
@@ -82,7 +78,7 @@ jobs:
             cp "$SO_SOURCE" "$SO_DEST"
           fi
 
-      - name: 发布到Releases
+      - name: 发布到Releases（无复杂表达式）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-64bit-latest
