@@ -45,12 +45,25 @@ echo "Building Letta FFI (64-bit)..."
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
-    build -p letta-ffi --profile mobile --verbose  # 仅加--verbose
+    build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 修复：指定目标架构生成C头文件（解决x86-64和aarch64冲突）
+# 🔧 最终正确命令：生成C头文件（参数全对，无无效项）
 echo "Generating C header (aarch64 architecture)..."
-cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile --no-run
-cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
+# 仅用3个有效参数：指定包、目标架构、编译配置，完全符合cargo build语法
+cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile
+# 复制头文件到JNI目录（原作者逻辑，正确）
+cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
+    echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
+    # 容错：如果头文件生成到target目录，自动复制
+    HEAD_FILE=$(find ${{ github.workspace }}/target -name "letta_lite.h" -type f | head -n 1)
+    if [ -n "$HEAD_FILE" ]; then
+        cp "$HEAD_FILE" bindings/android/src/main/jni/
+        echo -e "${GREEN}✅ 从$HEAD_FILE找到并复制头文件${NC}"
+    else
+        echo -e "${RED}❌ 头文件生成失败，终止编译${NC}"
+        exit 1
+    fi
+}
 
 # 🔧 仅编译64位JNI（原作者编译逻辑不变）
 echo "Compiling JNI wrapper (64-bit)..."
