@@ -4,7 +4,7 @@ jobs:
   build-with-script:
     runs-on: ubuntu-latest
     env:
-      # 🔴 与脚本保持一致的环境变量（脚本依赖这些变量，工作流统一设置）
+      # 与脚本保持一致的环境变量（脚本依赖这些变量，工作流统一设置）
       API_LEVEL: 21  # 和脚本里的API_LEVEL=21完全一致
       TARGET: aarch64-linux-android  # 和脚本里的TARGET完全一致
       ANDROID_NDK_VERSION: 27.3.13750724  # 脚本需要NDK，指定兼容版本
@@ -108,14 +108,15 @@ jobs:
             echo "❌ 脚本未生成AAR产物：$AAR_SOURCE"
             exit 1
           fi
-          # 重命名产物（加commit哈希，方便版本追溯）
-          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha:0:8 }}.aar"
+          # 重命名产物（修复语法错误：github.sha.substring(0, 8)）
+          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha.substring(0, 8) }}.aar"
           cp "$AAR_SOURCE" "$AAR_DEST"
           
           # 复制脚本生成的SO（备用产物，脚本输出路径：bindings/android/src/main/jniLibs/arm64-v8a/）
           SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
           if [ -f "$SO_SOURCE" ]; then
-            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha:0:8 }}.so"
+            # 修复语法错误：github.sha.substring(0, 8)
+            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha.substring(0, 8) }}.so"
             cp "$SO_SOURCE" "$SO_DEST"
           fi
           
@@ -128,7 +129,8 @@ jobs:
       - name: 发布到GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-64bit-script-${{ github.sha:0:8 }}
+          # 修复语法错误：github.sha.substring(0, 8)
+          tag_name: android-64bit-script-${{ github.sha.substring(0, 8) }}
           name: "Letta-Lite Android 64位AAR（脚本编译版）"
           body: |
             ### 编译方式
