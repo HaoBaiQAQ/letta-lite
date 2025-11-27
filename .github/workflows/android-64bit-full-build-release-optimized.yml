@@ -5,12 +5,17 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
+      ANDROID_API_LEVEL: 24
       RELEASE_DIR: ${{ github.workspace }}/release
       TARGET_ARCH: aarch64-linux-android
+      ANDROID_ABI: arm64-v8a
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
 
     steps:
       ###########################################################################
-      # 1. 拉取源码+全量子模块
+      # 1. 拉取源码+全量子模块（独立分支可用，不依赖其他分支）
       ###########################################################################
       - name: 拉取源码及子模块
         uses: actions/checkout@v4
@@ -19,93 +24,199 @@ jobs:
           fetch-depth: 0
 
       ###########################################################################
-      # 2. 补全依赖+关键：设置编译器路径
+      # 2. 补全依赖+配置环境（修复硬编码，添加验证）
       ###########################################################################
-      - name: 安装基础依赖
+      - name: 安装基础依赖（确保完整）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo openjdk-11-jdk unzip wget curl cmake make gcc \
-            pkg-config libssl-dev zlib1g-dev binutils android-sdk-platform-tools-common
+            pkg-config zlib1g-dev binutils android-sdk-platform-tools-common \
+            perl  # OpenSSL编译必需
+          # 配置Java_HOME（避免Gradle找不到JDK）
+          echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
+          echo "✅ 基础依赖安装完成"
 
-      - name: 安装Android NDK
+      - name: 安装Android NDK（自动设置环境变量）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;${{ env.ANDROID_NDK_VERSION }}"
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 配置Android 64位编译器路径（关键修复）
+      - name: 验证NDK并配置编译器路径（关键修复：避免硬编码）
         run: |
-          # 找到NDK里的64位编译器路径
-          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
-          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          # 告诉cargo，aarch64架构的编译器是哪个
-          echo "CC_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang" >> $GITHUB_ENV
-          echo "CXX_${TARGET_ARCH}=${CLANG_PATH}/aarch64-linux-android24-clang++" >> $GITHUB_ENV
-          # 把编译器路径加入系统PATH
+          # 自动获取NDK路径（不依赖硬编码）
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            echo "❌ 环境变量ANDROID_NDK_HOME未设置，NDK安装失败"
+            exit 1
+          fi
+          echo "✅ NDK路径：$ANDROID_NDK_HOME"
+          
+          # 配置64位编译器路径
+          CLANG_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -f "$CLANG_PATH/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" ]; then
+            echo "❌ 64位编译器缺失：$CLANG_PATH/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+            exit 1
+          fi
+          
+          # 告诉cargo目标架构的编译器
+          echo "CC_${TARGET_ARCH}=${CLANG_PATH}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang" >> $GITHUB_ENV
+          echo "CXX_${TARGET_ARCH}=${CLANG_PATH}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++" >> $GITHUB_ENV
+          echo "AR_${TARGET_ARCH}=${CLANG_PATH}/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB_${TARGET_ARCH}=${CLANG_PATH}/llvm-ranlib" >> $GITHUB_ENV
+          
+          # 添加编译器路径到系统PATH
           echo "$CLANG_PATH" >> $GITHUB_PATH
+          echo "✅ 64位编译器配置完成"
 
-      - name: 编译64位OpenSSL（补官方脚本依赖）
+      ###########################################################################
+      # 3. 编译64位OpenSSL（确保架构兼容，独立于分支）
+      ###########################################################################
+      - name: 编译64位OpenSSL（适配Android arm64-v8a）
         run: |
-          NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
-          CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          mkdir -p openssl-src openssl-install
-          cd openssl-src
-          wget -q https://www.openssl.org/source/openssl-1.1.1w.tar.gz
-          tar -xvzf openssl-1.1.1w.tar.gz --strip-components=1
-          export CC="$CLANG_PATH/aarch64-linux-android24-clang"
-          export AR="$CLANG_PATH/llvm-ar"
-          ./Configure linux-aarch64 no-shared no-asm --prefix=${{ github.workspace }}/openssl-install -fPIC
-          make -j$(nproc) && make install_sw
-          # 传入OpenSSL路径给官方脚本
-          echo "OPENSSL_DIR=${{ github.workspace }}/openssl-install" >> $GITHUB_ENV
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          
+          # 下载OpenSSL源码（独立下载，不依赖分支文件）
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          if [ $? -ne 0 ]; then
+            echo "❌ OpenSSL源码下载失败"
+            exit 1
+          fi
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          
+          # 配置交叉编译参数（确保64位架构适配）
+          export CC="${{ env.CC_${TARGET_ARCH} }}"
+          export AR="${{ env.AR_${TARGET_ARCH} }}"
+          export RANLIB="${{ env.RANLIB_${TARGET_ARCH} }}"
+          export SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
+          ./Configure linux-aarch64 \
+            no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=$SYSROOT \
+            -fPIC -march=armv8-a \
+            CC=$CC AR=$AR RANLIB=$RANLIB
+          
+          # 编译并安装
+          make -j$(nproc)
+          if [ $? -ne 0 ]; then
+            echo "❌ OpenSSL编译失败"
+            exit 1
+          fi
+          make install_sw
+          echo "✅ 64位OpenSSL编译完成：${{ env.OPENSSL_INSTALL_DIR }}"
+          
+          # 导出OpenSSL路径给后续脚本
+          echo "OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib" >> $GITHUB_ENV
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
       ###########################################################################
-      # 3. 执行修改后的官方脚本（仅64位）
+      # 4. 执行官方64位构建脚本（确保环境变量传递）
       ###########################################################################
       - name: 运行64位官方构建脚本
         run: |
-          # 配置NDK路径
-          export NDK_HOME="/usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}"
-          export ANDROID_NDK_HOME="$NDK_HOME"
+          # 验证官方脚本存在
+          SCRIPT_PATH="./scripts/build-android-64bit.sh"
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "❌ 官方构建脚本不存在：$SCRIPT_PATH"
+            exit 1
+          fi
+          
           # 给脚本加执行权限
-          chmod +x ./scripts/build-android-64bit.sh
-          # 运行官方脚本（所有编译、AAR生成逻辑都在里面）
-          ./scripts/build-android-64bit.sh
+          chmod +x "$SCRIPT_PATH"
+          
+          # 传递所有必要环境变量给脚本
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_NDK_HOME"
+          export TARGET_ARCH="${{ env.TARGET_ARCH }}"
+          export ANDROID_API_LEVEL="${{ env.ANDROID_API_LEVEL }}"
+          
+          # 运行脚本
+          echo "✅ 开始执行官方构建脚本：$SCRIPT_PATH"
+          "$SCRIPT_PATH"
+          if [ $? -ne 0 ]; then
+            echo "❌ 官方脚本执行失败"
+            exit 1
+          fi
 
       ###########################################################################
-      # 4. 复制产物到发布目录
+      # 5. 复制产物并验证（确保AAR和.so存在）
       ###########################################################################
-      - name: 复制AAR和核心.so
+      - name: 复制AAR和核心.so到发布目录
         run: |
           mkdir -p ${{ env.RELEASE_DIR }}
-          # 复制官方生成的AAR（官方脚本的输出路径）
-          cp ./bindings/android/build/outputs/aar/android-release.aar ${{ env.RELEASE_DIR }}/letta-lite-official.aar
-          # 复制核心.so（备用）
-          cp ./bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so ${{ env.RELEASE_DIR }}/letta-lite-official.so
+          
+          # 复制AAR（官方脚本默认输出路径）
+          AAR_SOURCE="./bindings/android/build/outputs/aar/android-release.aar"
+          if [ ! -f "$AAR_SOURCE" ]; then
+            echo "❌ AAR产物未找到：$AAR_SOURCE"
+            exit 1
+          fi
+          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-official-${{ github.sha:0:8 }}.aar"
+          cp "$AAR_SOURCE" "$AAR_DEST"
+          
+          # 复制核心.so（备用产物）
+          SO_SOURCE="./bindings/android/src/main/jniLibs/${{ env.ANDROID_ABI }}/libletta_ffi.so"
+          if [ -f "$SO_SOURCE" ]; then
+            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-official-${{ github.sha:0:8 }}.so"
+            cp "$SO_SOURCE" "$SO_DEST"
+          else
+            echo "⚠️  .so产物未找到，仅保留AAR"
+          fi
+          
+          # 打印产物列表
           echo "✅ 产物复制完成："
           ls -la ${{ env.RELEASE_DIR }}
+          
+          # 验证AAR完整性（确保包含.so）
+          unzip -q "$AAR_DEST" -d temp-aar
+          AAR_SO="temp-aar/jni/${{ env.ANDROID_ABI }}/libletta_ffi.so"
+          if [ ! -f "$AAR_SO" ]; then
+            echo "❌ AAR中未包含.so文件，产物无效"
+            exit 1
+          fi
+          echo "✅ AAR完整性验证通过，包含64位.so"
+          rm -rf temp-aar
 
       ###########################################################################
-      # 5. 发布到GitHub Releases
+      # 6. 发布到GitHub Releases（优化标签和描述）
       ###########################################################################
       - name: 发布到Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: "Letta-Lite Android 64位官方AAR ${{ github.ref_name }}"
+          tag_name: android-64bit-${{ github.sha:0:8 }}
+          name: "Letta-Lite Android 64位官方AAR（${{ github.sha:0:8 }}）"
           body: |
-            ### 核心特点
-            - 基于官方`build-android.sh`脚本修改，仅保留64位（arm64-v8a）
-            - 包含完整核心功能：Agent/记忆管理/本地LLM/云同步
-            - 自动生成AAR，可直接集成到Android项目
+            ### 核心信息
+            - 架构：仅64位（arm64-v8a），适配Android 24+
+            - 基于官方`build-android-64bit.sh`脚本构建
+            - 内置OpenSSL 1.1.1w（64位静态编译，无依赖冲突）
+            - 产物包含：完整核心功能（Agent/记忆管理/本地LLM/云同步）
 
             ### 集成步骤
-            1. 复制AAR到项目app/libs目录
-            2. build.gradle添加依赖：implementation files('libs/letta-lite-official.aar')
-            3. Kotlin调用：import ai.letta.lite.LettaLite → LettaLite.createDefault()
+            1. 下载AAR文件，复制到Android项目`app/libs`目录
+            2. 在app/build.gradle添加依赖：
+               ```kotlin
+               dependencies {
+                   implementation files('libs/letta-lite-official-${{ github.sha:0:8 }}.aar')
+               }
+               ```
+            3. Kotlin调用示例：
+               ```kotlin
+               import ai.letta.lite.LettaLite
+               val letta = LettaLite.createDefault()
+               val response = letta.converse("你的提问")
+               ```
+
+            ### 产物说明
+            - `.aar`：可直接集成的Android库（包含.so和Kotlin封装）
+            - `.so`：备用核心库（如需单独使用）
           files: |
-            ${{ env.RELEASE_DIR }}/letta-lite-official.aar
-            ${{ env.RELEASE_DIR }}/letta-lite-official.so
+            ${{ env.RELEASE_DIR }}/*.aar
+            ${{ env.RELEASE_DIR }}/*.so
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 仅在push到主分支或手动触发时发布（可选，避免冗余发布）
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
