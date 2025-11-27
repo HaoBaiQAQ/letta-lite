@@ -9,8 +9,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 定义64位目标架构（全局统一使用）
+# 定义关键变量（工具链用nightly，支持-Z选项）
 TARGET_ARCH="aarch64-linux-android"
+RUST_TOOLCHAIN="nightly" # 必须用nightly，支持-Z build-std
 
 # 检查必需工具
 check_command() {
@@ -22,6 +23,11 @@ check_command() {
 
 check_command rustup
 check_command cargo
+
+# 安装Nightly工具链（支持-Z选项）
+echo "Installing Nightly Rust toolchain..."
+rustup install "$RUST_TOOLCHAIN"
+rustup default "$RUST_TOOLCHAIN"
 
 # 检查并安装cargo-ndk
 if ! cargo ndk --version &> /dev/null; then
@@ -42,16 +48,16 @@ NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（关键修复：-- 移到 build 前面，正确分隔参数）
-echo "Building for Android ($TARGET_ARCH)..."
+# 编译核心库（最终正确格式：指定nightly+参数分隔+rustflags）
+echo "Building for Android ($TARGET_ARCH) with Nightly toolchain..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-# 正确格式：cargo ndk [ndk参数] -- build [cargo参数]
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
+# 正确格式：cargo +nightly ndk [ndk参数] -- build [cargo参数]
+cargo +"$RUST_TOOLCHAIN" ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
-# 生成C头文件（格式正确）
+# 生成C头文件（用nightly工具链）
 echo "Generating C header (for $TARGET_ARCH)..."
-cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
+cargo +"$RUST_TOOLCHAIN" build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 编译64位JNI wrapper（显式链接系统库）
