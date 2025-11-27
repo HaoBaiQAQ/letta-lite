@@ -47,9 +47,9 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 仅加--verbose
 
-# 🔧 修复：生成C头文件（去掉多余的--features cbindgen）
-echo "Generating C header..."
-cargo build -p letta-ffi  # 关键修改：去掉--features cbindgen，按原作者配置自动生成
+# 🔧 修复：指定目标架构生成C头文件（解决x86-64和aarch64冲突）
+echo "Generating C header (aarch64 architecture)..."
+cargo build -p letta-ffi --target=aarch64-linux-android --profile mobile --no-run
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
 # 🔧 仅编译64位JNI（原作者编译逻辑不变）
