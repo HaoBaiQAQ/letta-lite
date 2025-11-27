@@ -14,6 +14,7 @@ TARGET_ARCH="aarch64-linux-android"
 RUST_TOOLCHAIN="nightly"
 FFI_MANIFEST_PATH="ffi/Cargo.toml"
 ANDROID_API_LEVEL="24"
+CARGO_NDK_TAG="v0.10.0" # 官方稳定版 tag，支持 --api 参数
 
 # 检查必需工具
 check_command() {
@@ -25,11 +26,11 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 关键修正：指定安装仓库中的 "cargo-ndk" 主包，忽略其他子包
-echo "Uninstalling all cargo-ndk and installing OFFICIAL Android version from Git..."
+# 关键：指定官方稳定版 tag，彻底避开错误版本
+echo "Uninstalling all cargo-ndk and installing OFFICIAL v$CARGO_NDK_TAG..."
 cargo uninstall cargo-ndk 2>/dev/null || true
-# 修正：在仓库地址后加上 "cargo-ndk"，明确安装主包
-cargo install --git https://github.com/bbqsrc/cargo-ndk.git cargo-ndk --force
+# 修正：加上 --tag $CARGO_NDK_TAG，安装明确的稳定版
+cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag "$CARGO_NDK_TAG" cargo-ndk --force
 
 # 切换到 Nightly 工具链
 echo "Installing and switching to Nightly Rust toolchain..."
@@ -52,7 +53,7 @@ echo "Setting RUSTFLAGS (only OpenSSL path)..."
 OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
 export RUSTFLAGS="-L $OPENSSL_PATH"
 
-# 编译核心库（现在工具是真的，--api 参数会被识别）
+# 编译核心库（现在工具是真的，--api 会被识别）
 echo "Building for Android ($TARGET_ARCH, API $ANDROID_API_LEVEL)..."
 cargo ndk \
     -t "$TARGET_ARCH" \
