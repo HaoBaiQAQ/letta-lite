@@ -4,13 +4,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: 27.3.13750724  # 适配安卓64位，工具链更全
+      ANDROID_NDK_VERSION: 27.3.13750724
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      OPENSSL_VERSION: 1.1.1w  # 匹配openssl-sys 0.9.111，稳定兼容
+      OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
       OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
-      TARGET_ARCH: aarch64-linux-android  # 天玑1200的aarch64架构
-      ANDROID_API_LEVEL: 24  # 适配NDK 27.x，兼容天玑1200的安卓版本
+      TARGET_ARCH: aarch64-linux-android
+      ANDROID_API_LEVEL: 24
+      RELEASE_TAG: android-tianji1200-v1.0  # 纯英文标签，用于Releases
 
     steps:
       - name: 拉取源码（含llama.cpp子模块）
@@ -19,16 +20,16 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: 安装基础依赖（含OpenSSL编译必需工具）
+      - name: 安装基础依赖
         run: |
           sudo apt-get update --fix-missing
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config
-          java -version  # 验证JDK 17
-          gradle -v  # 验证Gradle
+          java -version
+          gradle -v
 
-      - name: 安装Android NDK+SDK（适配API 24）
+      - name: 安装Android NDK+SDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
@@ -36,95 +37,94 @@ jobs:
 
       - name: 验证NDK并配置工具链
         run: |
-          # 查找NDK实际路径
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
           if [ -z "$NDK_PATH" ]; then
             echo "❌ 未找到NDK ${{ env.ANDROID_NDK_VERSION }}"
             exit 1
           fi
-          # 配置NDK工具链和sysroot（安卓编译专用）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-          # 验证安卓64位编译器（匹配API 24）
           COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           if [ ! -f "$COMPILER_PATH" ]; then
             echo "❌ 编译器缺失：$COMPILER_PATH"
             exit 1
           fi
-          echo "✅ NDK配置完成，编译器路径：$COMPILER_PATH"
+          echo "✅ NDK配置完成"
 
       - name: 编译安卓专属OpenSSL（android-arm64配置）
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
-          # 下载OpenSSL 1.1.1w源码
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          # 配置安卓交叉编译环境
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
-          # 🔴 核心调整：用android-arm64（天玑1200安卓手机专属配置）
           ./Configure android-arm64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
             -fPIC -march=armv8-a \
             CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-          # 多线程编译（加速）
           make -j$(nproc) V=1
-          # 安装库和头文件（仅保留编译必需文件）
           make install_sw
-          echo "✅ OpenSSL编译完成，安装路径：${{ env.OPENSSL_INSTALL_DIR }}"
-          # 🔴 修复验证命令：兼容安卓库的file输出格式
+          echo "✅ OpenSSL编译完成"
           LIB_PATH="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
-          if file "$LIB_PATH" | grep -qE "aarch64|64-bit ARM|ARM aarch64"; then
-            echo "✅ OpenSSL架构验证通过（适配天玑1200）"
+          if file "$LIB_PATH" | grep -qE "aarch64|64-bit ARM"; then
+            echo "✅ OpenSSL架构验证通过"
           else
             echo "⚠️  架构验证输出：$(file "$LIB_PATH")"
-            echo "⚠️  继续执行，可能不影响后续编译"
           fi
 
-      - name: 配置Rust环境（适配aarch64）
+      - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 安装cargo-ndk（作者脚本依赖）
-        run: cargo install cargo-ndk --version=3.5.4 --locked  # 参考脚本验证的稳定版本
+      - name: 安装cargo-ndk
+        run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 执行作者原生脚本（传递OpenSSL路径）
+      - name: 执行作者原生脚本
         run: |
-          # 告诉作者脚本的cargo ndk去哪里找OpenSSL
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export PKG_CONFIG_ALLOW_CROSS=1
-          # 给作者脚本加执行权限（替换为你的脚本实际路径）
-          chmod +x ./scripts/build-android.sh
-          # 执行脚本并记录详细日志（失败时可排查）
+          chmod +x ./scripts/build-android.sh  # 替换为你的作者脚本实际路径
           ./scripts/build-android.sh 2>&1 | tee build.log
 
-      - name: 收集产物（AAR+SO，适配天玑1200）
+      - name: 收集产物（纯英文命名，避免中文报错）
         run: |
           mkdir -p ./release
-          # 按作者脚本默认路径收集（如果作者脚本输出路径不同，按需修改）
-          cp bindings/android/build/outputs/aar/android-release.aar ./release/letta-lite-android.aar || echo "⚠️ AAR未找到"
-          cp bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so ./release/letta-lite-jni.so || echo "⚠️ SO未找到"
+          # 产物文件用纯英文命名
+          AAR_SOURCE="bindings/android/build/outputs/aar/android-release.aar"
+          SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
+          # 复制并改名（纯英文，方便下载）
+          cp "$AAR_SOURCE" ./release/letta-lite-android-tianji1200.aar || echo "⚠️ AAR未找到"
+          cp "$SO_SOURCE" ./release/letta-lite-jni-tianji1200.so || echo "⚠️ SO未找到"
+          cp ./build.log ./release/build-tianji1200.log  # 日志也改名
           ls -l ./release/  # 显示产物列表
 
-      - name: 上传产物+日志（方便排错）
-        uses: actions/upload-artifact@v4
+      - name: 发布到GitHub Releases（直接下载无报错）
+        uses: softprops/action-gh-release@v2
         with:
-          name: letta-lite-天玑1200适配版
-          path: |
-            ./release/*
-            ./build.log
-            ${{ env.OPENSSL_INSTALL_DIR }}/lib/*.a
-          retention-days: 14
+          tag_name: ${{ env.RELEASE_TAG }}  # 纯英文标签
+          name: Letta-Lite Android (Tianji1200适配版)  # 名称可含中文，Releases支持
+          body: |
+            ### 适配设备：天玑1200（安卓64位，aarch64架构）
+            - OpenSSL版本：1.1.1w（安卓专属android-arm64配置）
+            - NDK版本：27.3.13750724
+            - 最小支持安卓版本：24
+            - 产物包含：AAR集成包 + JNI核心SO库 + 编译日志
+          files: |
+            ./release/*.aar
+            ./release/*.so
+            ./release/*.log
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动提供，无需手动配置
