@@ -42,16 +42,11 @@ export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
 # 🔧 关键修复2：显式指定工具链安装目标，验证路径
 echo "Adding Android 64-bit target (aarch64-linux-android) to ${ACTIVE_TOOLCHAIN}..."
-# 显式指定工具链安装，避免安装到其他工具链
 rustup target add aarch64-linux-android --toolchain "${ACTIVE_TOOLCHAIN}"
-# 验证目标是否安装成功（更精准的检查）
 if ! rustup target list --toolchain "${ACTIVE_TOOLCHAIN}" | grep -q "aarch64-linux-android (installed)"; then
     echo -e "${RED}Error: aarch64-linux-android target not installed for ${ACTIVE_TOOLCHAIN}${NC}"
-    echo "Available targets:"
-    rustup target list --toolchain "${ACTIVE_TOOLCHAIN}"
     exit 1
 fi
-# 手动计算 RUSTLIB 路径（核心！告诉cargo build核心库在哪）
 RUSTLIB_PATH="$HOME/.rustup/toolchains/${ACTIVE_TOOLCHAIN}/lib/rustlib/${CARGO_TARGET}"
 if [ ! -d "${RUSTLIB_PATH}" ]; then
     echo -e "${RED}Error: RUSTLIB path not found: ${RUSTLIB_PATH}${NC}"
@@ -65,9 +60,9 @@ echo "Building Letta FFI (64-bit)..."
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
-    build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
+    build -p letta-ffi --profile mobile --verbose
 
-# 🔧 终极修复：用 NDK 的 libunwind_llvm.so 替代 libunwind.so
+# 🔧 核心优化：自动查找 unwind_llvm 静态库路径（不用手动猜）
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -75,11 +70,30 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 补充2个关键路径：API版本路径 + 无API版本路径（NDK核心库在这里）
+# 4. 自动搜索 NDK 中 unwind_llvm 的静态库（.a文件）
+echo "Searching for libunwind_llvm.a in NDK..."
+UNWIND_LLVM_LIB=$(find "${NDK_HOME}" -name "libunwind_llvm.a" -path "*/aarch64*" | head -n 1)
+if [ -z "${UNWIND_LLVM_LIB}" ]; then
+    echo -e "${RED}Error: libunwind_llvm.a not found in NDK${NC}"
+    exit 1
+fi
+# 提取库所在目录（链接器需要路径，不是文件）
+UNWIND_LLVM_PATH=$(dirname "${UNWIND_LLVM_LIB}")
+echo -e "${GREEN}✅ Found libunwind_llvm.a at: ${UNWIND_LLVM_LIB}${NC}"
+echo -e "✅ Adding path to linker: ${UNWIND_LLVM_PATH}${NC}"
+
+# 5. 拼接所有路径，添加 unwind_llvm 库路径
 NDK_LIB_API_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
-NDK_LIB_CORE_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android"  # 无API版本，包含unwind_llvm
-# 5. 关键参数：-lunwind_llvm 替代 -lunwind，同时保留允许未定义符号
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_API_PATH} -L${NDK_LIB_CORE_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=-lunwind_llvm -C link-arg=--allow-shlib-undefined"
+NDK_LIB_CORE_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android"
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} \
+-L${NDK_SYSROOT}/usr/lib \
+-L${NDK_LIB_API_PATH} \
+-L${NDK_LIB_CORE_PATH} \
+-L${UNWIND_LLVM_PATH} \
+-L${RUSTLIB_PATH}/lib \
+-C link-arg=-lunwind_llvm \
+-C link-arg=--allow-shlib-undefined"
+
 # 执行cargo build，生成头文件
 echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
@@ -87,6 +101,7 @@ cargo build -p letta-ffi \
     --profile mobile \
     --config "target.aarch64-linux-android.linker=\"${LINKER_PATH}\"" \
     --verbose
+
 # 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
     echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
@@ -124,10 +139,10 @@ compile_jni() {
 }
 
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
-    compile_jni "arm64-v8a" "aarch64-linux-android"  # 仅保留64位
+    compile_jni "arm64-v8a" "aarch64-linux-android"
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
-    exit 1  # JNI缺失会导致AAR无用，直接报错
+    exit 1
 fi
 
 # 原作者AAR构建逻辑（现在不会被打断，能正常执行）
@@ -135,14 +150,12 @@ echo "Building Android AAR..."
 cd bindings/android
 if [ -f "gradlew" ]; then
     chmod +x gradlew
-    echo "Running gradlew assembleRelease..."
     ./gradlew assembleRelease --verbose --stacktrace
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ gradlew assembleRelease failed${NC}"
         exit 1
     fi
 else
-    echo -e "${YELLOW}gradlew not found, using system gradle${NC}"
     gradle assembleRelease --verbose --stacktrace
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ gradle assembleRelease failed${NC}"
