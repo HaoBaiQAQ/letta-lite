@@ -67,7 +67,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 终极修复：修正链接器参数语法，忽略unwind库
+# 🔧 终极修复：用 NDK 的 libunwind_llvm.so 替代 libunwind.so
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -75,10 +75,11 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 具体系统库路径（架构+API级别）
-NDK_LIB_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
-# 5. 修正参数：直接传递--allow-shlib-undefined，去掉-Wl,前缀
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=--allow-shlib-undefined"
+# 4. 补充2个关键路径：API版本路径 + 无API版本路径（NDK核心库在这里）
+NDK_LIB_API_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
+NDK_LIB_CORE_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android"  # 无API版本，包含unwind_llvm
+# 5. 关键参数：-lunwind_llvm 替代 -lunwind，同时保留允许未定义符号
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_API_PATH} -L${NDK_LIB_CORE_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=-lunwind_llvm -C link-arg=--allow-shlib-undefined"
 # 执行cargo build，生成头文件
 echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
