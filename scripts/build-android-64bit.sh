@@ -9,9 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 定义关键变量（工具链用nightly，支持-Z选项）
 TARGET_ARCH="aarch64-linux-android"
-RUST_TOOLCHAIN="nightly" # 必须用nightly，支持-Z build-std
 
 # 检查必需工具
 check_command() {
@@ -23,11 +21,6 @@ check_command() {
 
 check_command rustup
 check_command cargo
-
-# 安装Nightly工具链（支持-Z选项）
-echo "Installing Nightly Rust toolchain..."
-rustup install "$RUST_TOOLCHAIN"
-rustup default "$RUST_TOOLCHAIN"
 
 # 检查并安装cargo-ndk
 if ! cargo ndk --version &> /dev/null; then
@@ -41,30 +34,28 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo "Please set one of these environment variables to your Android NDK path"
     exit 1
 fi
-# 统一NDK路径变量
 NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 只添加64位目标架构（避免32位冲突）
+# 只添加64位目标架构
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 编译核心库（最终正确格式：指定nightly+参数分隔+rustflags）
-echo "Building for Android ($TARGET_ARCH) with Nightly toolchain..."
+# 关键修复：用单引号包裹--rustflags的值，避免shell拆分
+echo "Building for Android ($TARGET_ARCH)..."
 export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
 LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-# 正确格式：cargo +nightly ndk [ndk参数] -- build [cargo参数]
-cargo +"$RUST_TOOLCHAIN" ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --rustflags="-L $NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
+# 用单引号 ' 包裹--rustflags的值，确保完整传递
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose --rustflags='$RUSTFLAGS -L '"$NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
 
-# 生成C头文件（用nightly工具链）
+# 生成C头文件
 echo "Generating C header (for $TARGET_ARCH)..."
-cargo +"$RUST_TOOLCHAIN" build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
+cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
-# 编译64位JNI wrapper（显式链接系统库）
+# 编译64位JNI wrapper
 echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
-# JNI编译函数（紧凑格式，无多余字符）
 compile_jni() {
     local arch=$1
     local triple=$2
@@ -74,14 +65,13 @@ compile_jni() {
     "$CLANG_PATH/clang" --target="${triple}${api_level}" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" -I"${NDK_HOME}/sysroot/usr/include" -Iffi/include -shared -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" bindings/android/src/main/jni/letta_jni.c -L"bindings/android/src/main/jniLibs/${arch}" -lletta_ffi -llog -lunwind
 }
 
-# 检查JNI源文件并编译
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
 fi
 
-# 构建AAR（使用官方现成配置）
+# 构建AAR
 if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
     echo "Building Android AAR (arm64-v8a)..."
     cd bindings/android
