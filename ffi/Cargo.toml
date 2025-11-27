@@ -21,17 +21,3 @@ libc = "0.2"
 
 [build-dependencies]
 cbindgen = "0.26"
-
-# 正确格式：[profile.mobile] 是独立配置块，里面定义 rustflags 数组
-[profile.mobile]
-rustflags = [
-    # Android 系统库路径（aarch64，合并成完整字符串，无空格问题）
-    "-L/usr/local/lib/android/sdk/ndk/27.3.13750724/sysroot/usr/lib/aarch64-linux-android",
-    # LLVM 补充库路径（解决 libunwind.so 链接）
-    "-L/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64",
-    # 64位 OpenSSL 库路径
-    "-L/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-    # 显式链接 Android 系统库（-llog = 链接 liblog.so，-lunwind = 链接 libunwind.so）
-    "-llog",
-    "-lunwind",
-]
