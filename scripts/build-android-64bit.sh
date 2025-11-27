@@ -25,11 +25,11 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 关键步骤：彻底卸载所有 cargo-ndk，从官方仓库安装真工具（绕开 Crates.io 同名冲突）
+# 关键修正：指定安装仓库中的 "cargo-ndk" 主包，忽略其他子包
 echo "Uninstalling all cargo-ndk and installing OFFICIAL Android version from Git..."
-cargo uninstall cargo-ndk 2>/dev/null || true # 卸载所有版本（包括假工具）
-# 直接从官方仓库安装，确保是 Android 专用版本（支持 --api 参数）
-cargo install --git https://github.com/bbqsrc/cargo-ndk.git --force
+cargo uninstall cargo-ndk 2>/dev/null || true
+# 修正：在仓库地址后加上 "cargo-ndk"，明确安装主包
+cargo install --git https://github.com/bbqsrc/cargo-ndk.git cargo-ndk --force
 
 # 切换到 Nightly 工具链
 echo "Installing and switching to Nightly Rust toolchain..."
