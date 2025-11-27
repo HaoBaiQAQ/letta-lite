@@ -67,7 +67,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 补全sysroot+具体系统库路径（最终修复：让链接器找到系统库）
+# 🔧 终极修复：忽略unwind库（panic=abort用不到），完成链接
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -75,17 +75,17 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 关键添加：具体的系统库路径（架构+API级别，NDK库实际存放位置）
+# 4. 具体系统库路径（架构+API级别）
 NDK_LIB_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
-# 设置RUSTFLAGS，包含所有必要路径（sysroot+系统库+核心库）
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib"
-# 执行cargo build，生成头文件（输出日志便于排查）
+# 5. 关键添加：忽略unwind库（panic=abort无需栈展开）
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib -C link-arg=-Wl,--allow-shlib-undefined"
+# 执行cargo build，生成头文件
 echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
     --target=aarch64-linux-android \
     --profile mobile \
     --config "target.aarch64-linux-android.linker=\"${LINKER_PATH}\"" \
-    --verbose  # 加--verbose，输出详细编译日志
+    --verbose
 # 复制头文件（保留容错逻辑）
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || {
     echo -e "${YELLOW}Warning: 头文件未找到，尝试查找生成路径...${NC}"
