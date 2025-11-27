@@ -1,75 +1,67 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Building Letta Lite for Android..."
+# 🔧 强制仅编译64位架构，彻底禁用32位，避免冲突
+export CARGO_TARGET=aarch64-linux-android
+export ANDROID_ABI=arm64-v8a
 
-# Colors for output
+echo "Building Letta Lite for Android (64-bit only)..."
+
+# 原作者颜色配置
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Check for required tools
+# 原作者工具检查
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: $1 is not installed${NC}"
         exit 1
     fi
 }
-
 check_command rustup
 check_command cargo
 
-# Check for cargo-ndk
+# 原作者cargo-ndk安装（用原作者方式，不指定版本避免冲突）
 if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing cargo-ndk...${NC}"
     cargo install cargo-ndk
 fi
 
-# Check NDK_HOME or ANDROID_NDK_HOME
+# 原作者NDK路径检查
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
-    echo "Please set one of these environment variables to your Android NDK path"
     exit 1
 fi
+export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# Add Android targets if not already added
-echo "Adding Android targets..."
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
+# 🔧 仅添加64位目标架构（arm64-v8a）
+echo "Adding Android 64-bit target (aarch64-linux-android)..."
+rustup target add aarch64-linux-android || true
 
-# Build for all Android architectures
-echo "Building for Android (all architectures)..."
+# 🔧 仅编译64位，加--verbose便于排错（原作者核心编译逻辑不变）
+echo "Building Letta FFI (64-bit)..."
 cargo ndk \
     -t arm64-v8a \
-    -t armeabi-v7a \
-    -t x86_64 \
-    -t x86 \
     -o bindings/android/src/main/jniLibs \
-    build -p letta-ffi --profile mobile
+    build -p letta-ffi --profile mobile --verbose  # 仅加--verbose
 
-# Generate header file
+# 🔧 修复：生成C头文件（去掉多余的--features cbindgen）
 echo "Generating C header..."
-cargo build -p letta-ffi --features cbindgen
+cargo build -p letta-ffi  # 关键修改：去掉--features cbindgen，按原作者配置自动生成
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
-# Compile JNI wrapper
-echo "Compiling JNI wrapper..."
-NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
-
-# Create output directories
+# 🔧 仅编译64位JNI（原作者编译逻辑不变）
+echo "Compiling JNI wrapper (64-bit)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
-mkdir -p bindings/android/src/main/jniLibs/armeabi-v7a
-mkdir -p bindings/android/src/main/jniLibs/x86_64
-mkdir -p bindings/android/src/main/jniLibs/x86
 
-# Build JNI wrapper for each architecture
 compile_jni() {
     local arch=$1
     local triple=$2
     local api_level=21
     
     echo "  Building JNI for $arch..."
-    
     "${NDK_HOME}"/toolchains/llvm/prebuilt/*/bin/clang \
         --target="${triple}${api_level}" \
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
@@ -83,39 +75,44 @@ compile_jni() {
         -lletta_ffi
 }
 
-# Only compile JNI if the C file exists
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
-    compile_jni "arm64-v8a" "aarch64-linux-android"
-    compile_jni "armeabi-v7a" "armv7a-linux-androideabi"
-    compile_jni "x86_64" "x86_64-linux-android"
-    compile_jni "x86" "i686-linux-android"
+    compile_jni "arm64-v8a" "aarch64-linux-android"  # 仅保留64位
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
+    exit 1  # JNI缺失会导致AAR无用，直接报错
 fi
 
-# Build AAR if gradle is available
-if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
-    echo "Building Android AAR..."
-    cd bindings/android
-    if [ -f "gradlew" ]; then
-        ./gradlew assembleRelease
-    else
-        gradle assembleRelease
+# 原作者AAR构建逻辑（现在不会被打断，能正常执行）
+echo "Building Android AAR..."
+cd bindings/android
+if [ -f "gradlew" ]; then
+    chmod +x gradlew
+    echo "Running gradlew assembleRelease..."
+    ./gradlew assembleRelease --verbose --stacktrace
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ gradlew assembleRelease failed${NC}"
+        exit 1
     fi
-    cd ../..
-    
-    echo -e "${GREEN}Android build complete!${NC}"
-    echo ""
-    echo "AAR location: bindings/android/build/outputs/aar/android-release.aar"
 else
-    echo -e "${GREEN}Android libraries built!${NC}"
-    echo ""
-    echo "Libraries location: bindings/android/src/main/jniLibs/"
+    echo -e "${YELLOW}gradlew not found, using system gradle${NC}"
+    gradle assembleRelease --verbose --stacktrace
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ gradle assembleRelease failed${NC}"
+        exit 1
+    fi
 fi
+cd ../..
 
-echo ""
-echo "To use in your Android project:"
-echo "1. Add the AAR file to your project's libs folder"
-echo "2. Add to your app's build.gradle:"
-echo "   implementation files('libs/android-release.aar')"
-echo "3. Import in Kotlin: import ai.letta.lite.LettaLite"
+# 🔧 验证产物（确保SO和AAR都生成）
+AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
+SO_PATH="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
+if [ -f "$AAR_PATH" ] && [ -f "$SO_PATH" ]; then
+    echo -e "${GREEN}✅ Build successful!${NC}"
+    echo "AAR: $AAR_PATH"
+    echo "SO: $SO_PATH"
+else
+    echo -e "${RED}❌ Build failed: 产物缺失${NC}"
+    echo "AAR exists? $(test -f "$AAR_PATH" && echo "Yes" || echo "No")"
+    echo "SO exists? $(test -f "$SO_PATH" && echo "Yes" || echo "No")"
+    exit 1
+fi
