@@ -9,11 +9,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 核心配置（去掉 --api 参数，用环境变量替代）
+# 核心配置（只保留必要项，其余让 cargo-ndk 自动处理）
 TARGET_ARCH="aarch64-linux-android"
 RUST_TOOLCHAIN="nightly"
 FFI_MANIFEST_PATH="ffi/Cargo.toml"
-ANDROID_API_LEVEL="24" # 用环境变量传递给正确的 cargo-ndk
+ANDROID_API_LEVEL="24"
 
 # 检查必需工具
 check_command() {
@@ -25,10 +25,9 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 关键步骤1：卸载假的 cargo-ndk（若存在），安装官方 Android 专用 cargo-ndk（最新稳定版）
-echo "Uninstalling wrong cargo-ndk (if any) and installing official one..."
-cargo uninstall cargo-ndk 2>/dev/null || echo -e "${YELLOW}No wrong cargo-ndk found, proceeding...${NC}"
-# 修正：不指定错误版本号，直接安装官方最新稳定版（自动识别正确的包）
+# 确保安装的是官方 cargo-ndk（Android 专用）
+echo "Ensuring official cargo-ndk is installed..."
+cargo uninstall cargo-ndk 2>/dev/null || true
 cargo install cargo-ndk --force
 
 # 切换到 Nightly 工具链
@@ -36,35 +35,41 @@ echo "Installing and switching to Nightly Rust toolchain..."
 rustup install "$RUST_TOOLCHAIN"
 rustup default "$RUST_TOOLCHAIN"
 
-# 检查NDK路径
+# 检查NDK路径（只确认NDK存在，不手动干预子路径）
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
     exit 1
 fi
-NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
+export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}" # 暴露给 cargo-ndk 读取
 
-# 添加目标架构
+# 添加目标架构（cargo-ndk 依赖此目标）
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 设置 RUSTFLAGS 和 Android API 环境变量（替代 --api 参数）
-echo "Setting environment variables..."
-NDK_SYSROOT_AARCH64="$NDK_HOME/sysroot/usr/lib/aarch64-linux-android"
-LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+# 关键：只保留 OpenSSL 路径（非系统库，需手动指定），其余让 cargo-ndk 自动处理
+echo "Setting RUSTFLAGS (only OpenSSL path)..."
 OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
-export RUSTFLAGS="-L $NDK_SYSROOT_AARCH64 -L $LLVM_LIB_PATH -L $OPENSSL_PATH -llog -lunwind"
-export ANDROID_API_LEVEL="$ANDROID_API_LEVEL" # 用环境变量传递 API 级别，避免 --api 参数
+export RUSTFLAGS="-L $OPENSSL_PATH" # 去掉所有 NDK 系统路径，让 cargo-ndk 自动加
 
-# 编译核心库（去掉 --api 参数，用环境变量替代；确保是正确的 cargo-ndk）
+# 核心：让 cargo-ndk 全程接管，去掉 --target 参数（cargo-ndk 已自动指定）
 echo "Building for Android ($TARGET_ARCH, API $ANDROID_API_LEVEL)..."
-cargo ndk -t "$TARGET_ARCH" -o bindings/android/src/main/jniLibs -- build --manifest-path "$FFI_MANIFEST_PATH" --profile mobile --target "$TARGET_ARCH"
+cargo ndk \
+    -t "$TARGET_ARCH" \ # 只指定目标架构，其余由 cargo-ndk 自动配置
+    --api "$ANDROID_API_LEVEL" \ # 这次用 --api 参数（官方工具支持）
+    -o bindings/android/src/main/jniLibs \
+    -- build \
+        --manifest-path "$FFI_MANIFEST_PATH" \
+        --profile mobile
 
-# 生成C头文件
+# 生成C头文件（同样让 cargo-ndk 自动处理目标）
 echo "Generating C header (for $TARGET_ARCH)..."
-cargo build --manifest-path "$FFI_MANIFEST_PATH" --target "$TARGET_ARCH" --profile mobile
+cargo ndk -t "$TARGET_ARCH" --api "$ANDROID_API_LEVEL" -- build \
+    --manifest-path "$FFI_MANIFEST_PATH" \
+    --profile mobile
+
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || echo -e "${YELLOW}Warning: letta_lite.h not found, skipping${NC}"
 
-# 编译JNI wrapper
+# 编译JNI wrapper（用 NDK 自带的 clang 链接器）
 echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 compile_jni() {
@@ -72,11 +77,23 @@ compile_jni() {
     local triple=$2
     local api_level=$3
     echo "  Building JNI for $arch (API $api_level)..."
-    CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    "$CLANG_PATH/clang" --target="${triple}-android$api_level" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" -I"$NDK_HOME/sysroot/usr/include" -I"ffi/include" -shared -o "bindings/android/src/main/jniLibs/$arch/libletta_jni.so" bindings/android/src/main/jni/letta_jni.c -L"bindings/android/src/main/jniLibs/$arch" -lletta_ffi -L"$NDK_SYSROOT_AARCH64" -llog -lunwind
+    # 用 NDK 自带的 aarch64-linux-android-clang，确保能找到系统库
+    CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$triple$api_level-clang"
+    "$CLANG_PATH" \
+        -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
+        -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
+        -I"$NDK_HOME/sysroot/usr/include" \
+        -I"ffi/include" \
+        -shared \
+        -o "bindings/android/src/main/jniLibs/$arch/libletta_jni.so" \
+        bindings/android/src/main/jni/letta_jni.c \
+        -L"bindings/android/src/main/jniLibs/$arch" \
+        -lletta_ffi \
+        -llog \
+        -lunwind
 }
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
-    compile_jni "arm64-v8a" "aarch64-linux" "$ANDROID_API_LEVEL"
+    compile_jni "arm64-v8a" "aarch64-linux-android" "$ANDROID_API_LEVEL"
 else
     echo -e "${YELLOW}Warning: JNI source file not found, skipping${NC}"
 fi
