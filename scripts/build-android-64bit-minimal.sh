@@ -67,7 +67,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 补全sysroot+RUSTLIB，让cargo build找到核心库和系统库
+# 🔧 补全sysroot+具体系统库路径（最终修复：让链接器找到系统库）
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -75,8 +75,10 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 设置RUSTFLAGS，同时传递sysroot和RUSTLIB
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${RUSTLIB_PATH}/lib"
+# 4. 关键添加：具体的系统库路径（架构+API级别，NDK库实际存放位置）
+NDK_LIB_PATH="${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}"
+# 设置RUSTFLAGS，包含所有必要路径（sysroot+系统库+核心库）
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib -L${NDK_LIB_PATH} -L${RUSTLIB_PATH}/lib"
 # 执行cargo build，生成头文件（输出日志便于排查）
 echo "Running cargo build with RUSTFLAGS: ${RUSTFLAGS}"
 cargo build -p letta-ffi \
