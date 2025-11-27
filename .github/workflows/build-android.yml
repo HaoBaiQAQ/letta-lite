@@ -1,28 +1,29 @@
-name: 原作者脚本编译Android（修复依赖安装）
+name: 作者脚本+手动编译OpenSSL（Android 64位）
 on: [workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      ANDROID_NDK_VERSION: 23.2.8568313
+      ANDROID_NDK_VERSION: 23.2.8568313  # 稳定版，兼容OpenSSL编译
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      OPENSSL_VERSION: 1.1.1w  # LTS稳定版，适配openssl-sys 0.9.111
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      TARGET_ARCH: aarch64-linux-android  # 64位目标架构
 
     steps:
-      - name: 拉取源码（含子模块）
+      - name: 拉取源码（含子模块，llama.cpp必需）
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      - name: 安装基础依赖（修复命令格式）
+      - name: 安装基础依赖（含OpenSSL编译必需工具）
         run: |
-          # 1. 更新包索引，修复缺失的包索引
           sudo apt-get update --fix-missing
-          # 2. 整理包名，一行或正确换行，无多余空格
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
-            wget curl unzip gradle
-          # 验证安装
+            wget curl unzip gradle perl pkg-config  # 加perl（OpenSSL编译必需）
           java -version
           gradle -v
 
@@ -32,40 +33,89 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-21"
 
-      - name: 配置环境变量
+      - name: 验证NDK并配置工具链路径
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          CLANG_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
-          if [ ! -f "$CLANG_PATH" ]; then
-            echo "❌ NDK编译器缺失：$CLANG_PATH"
+          # 找到NDK实际路径
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ 未找到NDK"
+            exit 1
+          fi
+          # 配置NDK工具链和sysroot路径（给OpenSSL编译用）
+          NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          # 验证编译器存在
+          if [ ! -f "$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}21-clang" ]; then
+            echo "❌ 64位编译器缺失：$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}21-clang"
             exit 1
           fi
           echo "✅ NDK配置完成"
+
+      - name: 手动编译Android 64位OpenSSL（核心步骤，复用你的正确逻辑）
+        run: |
+          # 创建目录
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          # 下载OpenSSL源码
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          # 配置交叉编译环境（用NDK的工具链）
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}21-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}21-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          # 配置OpenSSL编译参数（64位Android专用）
+          ./Configure linux-aarch64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          # 编译并安装（-j$(nproc) 多线程加速）
+          make -j$(nproc) V=1
+          make install_sw  # 只安装库和头文件，不安装文档
+          echo "✅ OpenSSL 64位编译完成，安装路径：${{ env.OPENSSL_INSTALL_DIR }}"
+          # 验证产物（确保生成了64位库）
+          file ${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a | grep -q "aarch64" && echo "✅ OpenSSL库架构正确" || (echo "❌ OpenSSL架构错误" && exit 1)
 
       - name: 配置Rust环境
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          target: aarch64-linux-android
+          target: ${{ env.TARGET_ARCH }}
 
-      - name: 执行作者原生脚本
+      - name: 安装cargo-ndk（作者脚本依赖）
+        run: cargo install cargo-ndk
+
+      - name: 执行作者原生脚本（通过环境变量传递OpenSSL路径）
         run: |
-          chmod +x ./scripts/build-android.sh  # 替换为你的作者脚本路径
-          ./scripts/build-android.sh 2>&1 | tee build.log
+          # 关键：告诉Rust/作者脚本OpenSSL的位置
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export PKG_CONFIG_ALLOW_CROSS=1  # 允许交叉编译时使用pkg-config
+          # 给作者脚本加权限并执行
+          chmod +x ./scripts/build-android.sh  # 替换为你的作者脚本实际路径
+          ./scripts/build-android.sh 2>&1 | tee build.log  # 记录日志
 
-      - name: 收集产物
+      - name: 收集产物（AAR+SO）
         run: |
           mkdir -p ./release
-          cp bindings/android/build/outputs/aar/android-release.aar ./release/
-          cp bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so ./release/
+          # 按作者脚本默认输出路径收集（如果作者脚本路径不同，按需修改）
+          cp bindings/android/build/outputs/aar/android-release.aar ./release/ || echo "⚠️ AAR未找到，查看日志"
+          cp bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so ./release/ || echo "⚠️ SO未找到，查看日志"
           ls -l ./release/
 
-      - name: 上传产物+日志
+      - name: 上传产物+日志（方便排错）
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-final
+          name: letta-lite-android-with-openssl
           path: |
             ./release/*
             ./build.log
+            ${{ env.OPENSSL_INSTALL_DIR }}/lib/*.a  # 上传OpenSSL库，方便排查
           retention-days: 14
