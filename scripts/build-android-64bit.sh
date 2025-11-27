@@ -51,14 +51,15 @@ export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 echo "Adding Android targets..."
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
 
-# Build for all Android architectures（核心修复：--api → --platform）
+# Build for all Android architectures（修复：注释移到单独一行，避免语法错误）
 echo "Building for Android (all architectures)..."
 cargo ndk \
     -t arm64-v8a \
     -t armeabi-v7a \
     -t x86_64 \
     -t x86 \
-    --platform 21 \ # 关键修复：替换--api为--platform，匹配官方参数名
+    # 匹配原作者的api_level=21（注释单独一行，不影响命令）
+    --platform 21 \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile
 
