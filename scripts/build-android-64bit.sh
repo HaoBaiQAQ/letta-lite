@@ -52,10 +52,11 @@ OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
 export RUSTFLAGS="-L $OPENSSL_PATH" # 去掉所有 NDK 系统路径，让 cargo-ndk 自动加
 
 # 核心：让 cargo-ndk 全程接管，去掉 --target 参数（cargo-ndk 已自动指定）
+# 修正：删除行末尾的 # 注释，确保每行末尾只有 \
 echo "Building for Android ($TARGET_ARCH, API $ANDROID_API_LEVEL)..."
 cargo ndk \
-    -t "$TARGET_ARCH" \ # 只指定目标架构，其余由 cargo-ndk 自动配置
-    --api "$ANDROID_API_LEVEL" \ # 这次用 --api 参数（官方工具支持）
+    -t "$TARGET_ARCH" \
+    --api "$ANDROID_API_LEVEL" \
     -o bindings/android/src/main/jniLibs \
     -- build \
         --manifest-path "$FFI_MANIFEST_PATH" \
