@@ -1,0 +1,136 @@
+name: Letta-Lite Android (Tianji1200 64bit)
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: 27.3.13750724
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      TARGET_ARCH: aarch64-linux-android
+      ANDROID_API_LEVEL: 24
+      ARTIFACT_NAME: letta-lite-android-tianji1200
+
+    steps:
+      - name: Checkout source code (with llama.cpp submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install base dependencies
+        run: |
+          sudo apt-get update --fix-missing
+          sudo apt-get install -y \
+            rustc cargo git make cbindgen openjdk-17-jdk \
+            wget curl unzip gradle perl pkg-config
+          java -version
+          gradle -v
+
+      - name: Install Android NDK + SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+
+      - name: Verify NDK and configure toolchain
+        run: |
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          if [ -z "$NDK_PATH" ]; then
+            echo "❌ NDK ${{ env.ANDROID_NDK_VERSION }} not found"
+            exit 1
+          fi
+          NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          if [ ! -f "$COMPILER_PATH" ]; then
+            echo "❌ Compiler missing: $COMPILER_PATH"
+            exit 1
+          fi
+          echo "✅ NDK configured successfully"
+
+      - name: Compile OpenSSL for Android (android-arm64)
+        run: |
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
+          ./Configure android-arm64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a \
+            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
+          make -j$(nproc) V=1
+          make install_sw
+          echo "✅ OpenSSL compiled successfully"
+          LIB_PATH="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
+          if file "$LIB_PATH" | grep -qE "aarch64|64-bit ARM"; then
+            echo "✅ OpenSSL architecture verified"
+          else
+            echo "⚠️ OpenSSL architecture output: $(file "$LIB_PATH")"
+          fi
+
+      - name: Configure Rust environment
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: ${{ env.TARGET_ARCH }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: Prepare 64bit-only build script
+        run: |
+          # 确保脚本有执行权限
+          chmod +x ./scripts/build-android-64bit-minimal.sh
+
+      - name: Execute 64bit-only build script (generate SO + AAR)
+        run: |
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
+          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
+          export PKG_CONFIG_ALLOW_CROSS=1
+          ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
+
+      - name: Collect artifacts (SO + AAR + log)
+        run: |
+          mkdir -p ./release
+          # 全局查找AAR（作者脚本输出路径）
+          AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | grep -E "release|android-release" | head -n 1)
+          if [ -n "$AAR_FILE" ]; then
+            cp "$AAR_FILE" ./release/letta-lite-android.aar
+            echo "✅ AAR found: $AAR_FILE"
+          else
+            echo "❌ AAR not found, check build.log"
+            exit 1
+          fi
+          # 全局查找SO
+          SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" -type f | grep -E "arm64|aarch64" | head -n 1)
+          if [ -n "$SO_FILE" ]; then
+            cp "$SO_FILE" ./release/letta-lite-jni.so
+            echo "✅ SO found: $SO_FILE"
+          else
+            echo "❌ SO not found, check build.log"
+            exit 1
+          fi
+          # 复制日志
+          cp ./build.log ./release/build.log
+          ls -l ./release/
+
+      - name: Upload to Artifacts (direct download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ./release/*
+          retention-days: 14
