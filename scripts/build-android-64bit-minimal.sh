@@ -36,9 +36,16 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 仅添加64位目标架构（arm64-v8a）
+# 🔧 关键修复：强制安装aarch64目标，失败不忽略，安装后验证
 echo "Adding Android 64-bit target (aarch64-linux-android)..."
-rustup target add aarch64-linux-android || true
+# 去掉|| true，安装失败直接报错，不继续
+rustup target add aarch64-linux-android
+# 验证目标是否安装成功（核心！避免安装失败被忽略）
+if ! rustup target list | grep -q "aarch64-linux-android (installed)"; then
+    echo -e "${RED}Error: aarch64-linux-android target not installed successfully${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ aarch64-linux-android target installed${NC}"
 
 # 🔧 仅编译64位，加--verbose便于排错（原作者核心编译逻辑不变）
 echo "Building Letta FFI (64-bit)..."
@@ -47,7 +54,7 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose  # 原作者的--profile mobile，正确
 
-# 🔧 终极补全：指定sysroot路径，让ld.lld找到系统库
+# 🔧 补全sysroot，让ld.lld找到系统库
 echo "Generating C header (aarch64 architecture)..."
 # 1. 编译器（CC）：编译源代码
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_API_LEVEL}-clang"
@@ -55,9 +62,9 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET_ARCH}${ANDROID_AP
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 # 3. 链接器（LD）：强制指定+sysroot路径
 LINKER_PATH="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 4. 设置RUSTFLAGS，传递sysroot给链接器（关键！告诉ld.lld系统库在哪）
+# 4. 设置RUSTFLAGS，传递sysroot给链接器
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L${NDK_SYSROOT}/usr/lib"
-# 执行cargo build，同时传递config和RUSTFLAGS
+# 执行cargo build，生成头文件
 cargo build -p letta-ffi \
     --target=aarch64-linux-android \
     --profile mobile \
