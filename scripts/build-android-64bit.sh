@@ -34,6 +34,11 @@ else
     fi
 fi
 
+# 关键：打印当前cargo-ndk的传参规则，云编译日志中可见
+echo -e "\n===== cargo-ndk 传参规则（当前版本 v4.1.2）====="
+cargo ndk --help
+echo -e "===== 传参规则打印结束 ====="
+
 # Check NDK_HOME or ANDROID_NDK_HOME
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
