@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 🔧 强制仅编译64位架构，彻底禁用32位，避免冲突
+export CARGO_TARGET=aarch64-linux-android
+export ANDROID_ABI=arm64-v8a
+
 echo "Building Letta Lite for Android (64-bit only)..."
 
 # 原作者颜色配置
@@ -30,13 +34,13 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
     exit 1
 fi
-export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
+export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 微改1：仅添加64位目标架构（arm64-v8a）
-echo "Adding Android 64-bit target..."
+# 🔧 仅添加64位目标架构（arm64-v8a）
+echo "Adding Android 64-bit target (aarch64-linux-android)..."
 rustup target add aarch64-linux-android || true
 
-# 🔧 微改2：仅编译64位，加--verbose便于排错（原作者核心编译逻辑不变）
+# 🔧 仅编译64位，加--verbose便于排错（原作者核心编译逻辑不变）
 echo "Building Letta FFI (64-bit)..."
 cargo ndk \
     -t arm64-v8a \
@@ -48,7 +52,7 @@ echo "Generating C header..."
 cargo build -p letta-ffi --features cbindgen
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
-# 🔧 微改3：仅编译64位JNI（原作者编译逻辑不变）
+# 🔧 仅编译64位JNI（原作者编译逻辑不变）
 echo "Compiling JNI wrapper (64-bit)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
@@ -78,18 +82,28 @@ else
     exit 1  # JNI缺失会导致AAR无用，直接报错
 fi
 
-# 原作者AAR构建逻辑
+# 原作者AAR构建逻辑（现在不会被打断，能正常执行）
 echo "Building Android AAR..."
 cd bindings/android
 if [ -f "gradlew" ]; then
     chmod +x gradlew
-    ./gradlew assembleRelease --verbose  # 加--verbose排错
+    echo "Running gradlew assembleRelease..."
+    ./gradlew assembleRelease --verbose --stacktrace
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ gradlew assembleRelease failed${NC}"
+        exit 1
+    fi
 else
-    gradle assembleRelease --verbose
+    echo -e "${YELLOW}gradlew not found, using system gradle${NC}"
+    gradle assembleRelease --verbose --stacktrace
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ gradle assembleRelease failed${NC}"
+        exit 1
+    fi
 fi
 cd ../..
 
-# 🔧 新增：验证产物（避免无声失败）
+# 🔧 验证产物（确保SO和AAR都生成）
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 SO_PATH="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
 if [ -f "$AAR_PATH" ] && [ -f "$SO_PATH" ]; then
@@ -98,5 +112,7 @@ if [ -f "$AAR_PATH" ] && [ -f "$SO_PATH" ]; then
     echo "SO: $SO_PATH"
 else
     echo -e "${RED}❌ Build failed: 产物缺失${NC}"
+    echo "AAR exists? $(test -f "$AAR_PATH" && echo "Yes" || echo "No")"
+    echo "SO exists? $(test -f "$SO_PATH" && echo "Yes" || echo "No")"
     exit 1
 fi
