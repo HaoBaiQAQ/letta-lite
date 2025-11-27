@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Building Letta Lite for Android..."
+echo "Building Letta Lite for Android (64-bit arm64-v8a only)..."
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,17 +45,14 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# Add all Android targets
-echo "Adding Android targets..."
-rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
+# 仅添加64位目标架构（arm64-v8a）
+echo "Adding Android 64-bit target (arm64-v8a)..."
+rustup target add aarch64-linux-android || true
 
-# Core build (彻底消除语法歧义：-- 后直接跟 cargo 命令，无任何注释/空行干扰)
-echo "Building for Android (all architectures)..."
+# 核心编译：仅编译arm64-v8a，避免多架构OpenSSL冲突
+echo "Building for Android 64-bit (arm64-v8a)..."
 cargo ndk \
     -t arm64-v8a \
-    -t armeabi-v7a \
-    -t x86_64 \
-    -t x86 \
     --platform 21 \
     -o bindings/android/src/main/jniLibs \
     -- build -p letta-ffi --profile mobile
@@ -70,25 +67,24 @@ else
     exit 1
 fi
 
-# Compile JNI wrapper for all architectures
-echo "Compiling JNI wrapper..."
+# 仅编译64位JNI wrapper（arm64-v8a）
+echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
-mkdir -p bindings/android/src/main/jniLibs/armeabi-v7a
-mkdir -p bindings/android/src/main/jniLibs/x86_64
-mkdir -p bindings/android/src/main/jniLibs/x86
 
 compile_jni() {
     local arch=$1
     local triple=$2
     local api_level=21
-    echo "  Building JNI for $arch..."
+    echo "  Building JNI for $arch (API $api_level)..."
 
+    # 自动查找arm64-v8a对应的Clang路径
     CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
     if [ -z "$CLANG_PATH" ]; then
         echo -e "${RED}Error: Clang not found for ${triple}${api_level}${NC}"
         exit 1
     fi
 
+    # Java include路径兼容
     local JAVA_INCLUDE="${JAVA_HOME:-/usr/lib/jvm/default-java}/include"
     [ ! -d "$JAVA_INCLUDE" ] && JAVA_INCLUDE="/usr/lib/jvm/java-11-openjdk-amd64/include"
 
@@ -106,19 +102,16 @@ compile_jni() {
         -ldl
 }
 
-# Compile JNI if source file exists
+# 仅编译arm64-v8a的JNI
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
-    compile_jni "armeabi-v7a" "armv7a-linux-androideabi"
-    compile_jni "x86_64" "x86_64-linux-android"
-    compile_jni "x86" "i686-linux-android"
 else
     echo -e "${RED}Error: JNI source file (letta_jni.c) not found${NC}"
     exit 1
 fi
 
-# Build Android AAR
-echo "Building Android AAR..."
+# Build Android AAR（仅64位）
+echo "Building Android AAR (arm64-v8a)..."
 cd bindings/android
 if [ -f "gradlew" ]; then
     chmod +x gradlew
@@ -129,10 +122,10 @@ else
 fi
 cd ../..
 
-# Verify build result
+# 验证构建结果
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 if [ -f "$AAR_PATH" ]; then
-    echo -e "\n${GREEN}✅ Android build successful!${NC}"
+    echo -e "\n${GREEN}✅ Android 64-bit (arm64-v8a) build successful!${NC}"
     echo -e "📁 AAR Location: $AAR_PATH"
 else
     echo -e "\n${RED}❌ Error: AAR file not generated${NC}"
