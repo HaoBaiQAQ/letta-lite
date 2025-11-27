@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 核心配置（只保留必要项，其余让 cargo-ndk 自动处理）
+# 核心配置
 TARGET_ARCH="aarch64-linux-android"
 RUST_TOOLCHAIN="nightly"
 FFI_MANIFEST_PATH="ffi/Cargo.toml"
@@ -25,34 +25,34 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 确保安装的是官方 cargo-ndk（Android 专用）
-echo "Ensuring official cargo-ndk is installed..."
-cargo uninstall cargo-ndk 2>/dev/null || true
-cargo install cargo-ndk --force
+# 关键步骤：彻底卸载所有 cargo-ndk，从官方仓库安装真工具（绕开 Crates.io 同名冲突）
+echo "Uninstalling all cargo-ndk and installing OFFICIAL Android version from Git..."
+cargo uninstall cargo-ndk 2>/dev/null || true # 卸载所有版本（包括假工具）
+# 直接从官方仓库安装，确保是 Android 专用版本（支持 --api 参数）
+cargo install --git https://github.com/bbqsrc/cargo-ndk.git --force
 
 # 切换到 Nightly 工具链
 echo "Installing and switching to Nightly Rust toolchain..."
 rustup install "$RUST_TOOLCHAIN"
 rustup default "$RUST_TOOLCHAIN"
 
-# 检查NDK路径（只确认NDK存在，不手动干预子路径）
+# 检查NDK路径
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
     exit 1
 fi
-export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}" # 暴露给 cargo-ndk 读取
+export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 添加目标架构（cargo-ndk 依赖此目标）
+# 添加目标架构
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 关键：只保留 OpenSSL 路径（非系统库，需手动指定），其余让 cargo-ndk 自动处理
+# 设置 RUSTFLAGS（仅 OpenSSL 路径）
 echo "Setting RUSTFLAGS (only OpenSSL path)..."
 OPENSSL_PATH="/home/runner/work/letta-lite/letta-lite/openssl-install/lib"
-export RUSTFLAGS="-L $OPENSSL_PATH" # 去掉所有 NDK 系统路径，让 cargo-ndk 自动加
+export RUSTFLAGS="-L $OPENSSL_PATH"
 
-# 核心：让 cargo-ndk 全程接管，去掉 --target 参数（cargo-ndk 已自动指定）
-# 修正：删除行末尾的 # 注释，确保每行末尾只有 \
+# 编译核心库（现在工具是真的，--api 参数会被识别）
 echo "Building for Android ($TARGET_ARCH, API $ANDROID_API_LEVEL)..."
 cargo ndk \
     -t "$TARGET_ARCH" \
@@ -62,7 +62,7 @@ cargo ndk \
         --manifest-path "$FFI_MANIFEST_PATH" \
         --profile mobile
 
-# 生成C头文件（同样让 cargo-ndk 自动处理目标）
+# 生成C头文件
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo ndk -t "$TARGET_ARCH" --api "$ANDROID_API_LEVEL" -- build \
     --manifest-path "$FFI_MANIFEST_PATH" \
@@ -70,7 +70,7 @@ cargo ndk -t "$TARGET_ARCH" --api "$ANDROID_API_LEVEL" -- build \
 
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || echo -e "${YELLOW}Warning: letta_lite.h not found, skipping${NC}"
 
-# 编译JNI wrapper（用 NDK 自带的 clang 链接器）
+# 编译JNI wrapper
 echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 compile_jni() {
@@ -78,7 +78,6 @@ compile_jni() {
     local triple=$2
     local api_level=$3
     echo "  Building JNI for $arch (API $api_level)..."
-    # 用 NDK 自带的 aarch64-linux-android-clang，确保能找到系统库
     CLANG_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$triple$api_level-clang"
     "$CLANG_PATH" \
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
