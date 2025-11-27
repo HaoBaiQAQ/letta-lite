@@ -9,6 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# 定义关键变量
 TARGET_ARCH="aarch64-linux-android"
 
 # 检查必需工具
@@ -36,23 +37,20 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# 只添加64位目标架构
+# 只添加64位目标架构（避免32位冲突）
 echo "Adding 64-bit Android target ($TARGET_ARCH)..."
 rustup target add "$TARGET_ARCH" || true
 
-# 关键修复：用单引号包裹--rustflags的值，避免shell拆分
+# 编译核心库（简化命令，无--rustflags，从Cargo.toml读取配置）
 echo "Building for Android ($TARGET_ARCH)..."
-export NDK_SYSROOT="$NDK_HOME/sysroot/usr/lib"
-LLVM_LIB_PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
-# 用单引号 ' 包裹--rustflags的值，确保完整传递
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile --verbose --rustflags='$RUSTFLAGS -L '"$NDK_SYSROOT/aarch64-linux-android -L $LLVM_LIB_PATH"
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs -- build -p letta-ffi --profile mobile
 
 # 生成C头文件
 echo "Generating C header (for $TARGET_ARCH)..."
 cargo build -p letta-ffi --target "$TARGET_ARCH" --profile mobile
 cp ffi/include/letta_lite.h bindings/android/src/main/jni/ || true
 
-# 编译64位JNI wrapper
+# 编译64位JNI wrapper（显式链接系统库）
 echo "Compiling JNI wrapper (arm64-v8a)..."
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 
@@ -65,13 +63,14 @@ compile_jni() {
     "$CLANG_PATH/clang" --target="${triple}${api_level}" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" -I"${NDK_HOME}/sysroot/usr/include" -Iffi/include -shared -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" bindings/android/src/main/jni/letta_jni.c -L"bindings/android/src/main/jniLibs/${arch}" -lletta_ffi -llog -lunwind
 }
 
+# 检查JNI源文件并编译
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
 else
     echo -e "${YELLOW}Warning: JNI wrapper not found, skipping JNI compilation${NC}"
 fi
 
-# 构建AAR
+# 构建AAR（使用官方现成配置）
 if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
     echo "Building Android AAR (arm64-v8a)..."
     cd bindings/android
