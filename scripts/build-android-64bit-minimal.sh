@@ -61,22 +61,25 @@ fi
 export RUSTLIB="${RUSTLIB_PATH}"
 echo -e "${GREEN}✅ RUSTLIB set to: ${RUSTLIB_PATH}${NC}"
 
-# 🔧 仅编译64位核心库（原作者核心编译逻辑不变，已成功）
+# 🔧 仅编译64位核心库（已成功生成 libletta_ffi.so，复用成果！）
 echo "Building Letta FFI (64-bit)..."
 cargo ndk \
     -t arm64-v8a \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose
 
-# 🔧 核心改进：直接用 cbindgen 生成头文件，绕开 cargo build 依赖编译！
+# 🔧 修正：去掉多余的 --config 参数，用默认配置生成头文件（原作者无自定义配置）
 echo "Generating C header (aarch64 architecture)..."
-# 直接调用 cbindgen，指定 Rust 源码目录、输出路径，跳过所有依赖编译
 cbindgen \
-    --config ffi/cbindgen.toml \  # 原作者的配置文件（如果没有可去掉此参数）
-    --lang c \
-    --output bindings/android/src/main/jni/letta_lite.h \  # 直接输出到 JNI 目录
-    ffi/src/lib.rs  # 原作者的 Rust 源码入口
-echo -e "${GREEN}✅ C header generated successfully: bindings/android/src/main/jni/letta_lite.h${NC}"
+    --lang c \  # 生成C语言头文件（JNI需要）
+    --output bindings/android/src/main/jni/letta_lite.h \  # 输出到JNI目录，直接用
+    ffi/src/lib.rs  # Rust源码入口（和原作者 build.rs 一致）
+if [ -f "bindings/android/src/main/jni/letta_lite.h" ]; then
+    echo -e "${GREEN}✅ C header generated successfully: bindings/android/src/main/jni/letta_lite.h${NC}"
+else
+    echo -e "${RED}❌ Failed to generate C header${NC}"
+    exit 1
+fi
 
 # 🔧 仅编译64位JNI（原作者编译逻辑不变）
 echo "Compiling JNI wrapper (64-bit)..."
@@ -93,12 +96,12 @@ compile_jni() {
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
         -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
         -I"${NDK_HOME}/sysroot/usr/include" \
-        -Ibindings/android/src/main/jni/ \  # 头文件已在当前目录
+        -Ibindings/android/src/main/jni/ \  # 引用生成的头文件
         -shared \
         -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/${arch}" \
-        -lletta_ffi
+        -lletta_ffi  # 链接已生成的核心库
 }
 
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
