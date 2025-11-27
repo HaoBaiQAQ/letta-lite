@@ -1,11 +1,10 @@
-name: 原作者脚本编译Android（64位）
-on: [workflow_dispatch, push]
+name: 原作者脚本编译Android（修复环境）
+on: [workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 🔧 锁定NDK版本（原作者推荐23+，选稳定版23.2.8568313）
-      ANDROID_NDK_VERSION: 23.2.8568313
+      ANDROID_NDK_VERSION: 23.2.8568313  # 原作者推荐23+，稳定版
       JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
 
     steps:
@@ -15,54 +14,60 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: 安装基础依赖（原作者脚本必需）
+      - name: 安装基础依赖（作者脚本必需）
         run: |
           sudo apt-get update && sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-11-jdk \
-            wget curl unzip gradle
-          # 验证Java版本
-          java -version
+            wget curl unzip gradle  # 安装系统Gradle，避免gradlew缺失问题
+          java -version  # 验证Java环境
+          gradle -v  # 验证Gradle环境
 
-      - name: 安装Android NDK+SDK（原作者脚本依赖）
-        uses: android-actions/setup-android@v1  # 稳定版，兼容NDK 23
+      - name: 正确安装Android NDK+SDK（用v3版本Action，支持参数）
+        uses: android-actions/setup-android@v3  # 关键：升级到v3，解决参数报错
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-21"
 
-      - name: 配置环境变量（传递给脚本）
+      - name: 配置环境变量（传递给作者脚本）
         run: |
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          # 验证NDK编译器
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          # 验证NDK编译器是否存在
           CLANG_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
           if [ ! -f "$CLANG_PATH" ]; then
-            echo "❌ NDK编译器缺失"
+            echo "❌ NDK编译器缺失，路径：$CLANG_PATH"
             exit 1
           fi
           echo "✅ NDK配置完成"
 
-      - name: 配置Rust环境（原作者脚本依赖）
+      - name: 配置Rust环境（作者脚本依赖）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          target: aarch64-linux-android  # 仅64位目标
+          target: aarch64-linux-android
 
-      - name: 执行原作者微改脚本
+      - name: 执行作者原生脚本（不修改，仅补权限）
         run: |
-          # 给脚本加执行权限
-          chmod +x ./scripts/build-android-64bit-minimal.sh
-          # 执行脚本（输出详细日志）
-          ./scripts/build-android-64bit-minimal.sh
+          # 给作者脚本加执行权限
+          chmod +x ./scripts/build-android.sh  # 假设作者脚本叫这个名字，按需修改路径
+          # 进入脚本所在目录（如果需要）
+          cd scripts
+          # 执行作者脚本（输出详细日志，方便排错）
+          ./build-android.sh 2>&1 | tee build.log
 
       - name: 收集产物（AAR+SO）
         run: |
           mkdir -p ./release
+          # 按作者脚本的输出路径收集（如果作者脚本输出路径不同，按需修改）
           cp bindings/android/build/outputs/aar/android-release.aar ./release/
           cp bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so ./release/
           ls -l ./release/
 
-      - name: 上传产物（保留14天）
+      - name: 上传产物+日志（方便排错）
         uses: actions/upload-artifact@v4
         with:
-          name: letta-lite-android-64bit
-          path: ./release/*
+          name: letta-lite-android-output
+          path: |
+            ./release/*
+            ./scripts/build.log  # 上传编译日志，失败时可排查
           retention-days: 14
