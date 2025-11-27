@@ -19,141 +19,135 @@ check_command() {
 
 check_command rustup
 check_command cargo
-check_command git # 新增：确保git存在（后续从GitHub安装需要）
+check_command git
 
-# 修复：从官方GitHub安装cargo-ndk（避开Crates.io，装支持--api的真版本）
+# Install official cargo-ndk from GitHub (avoid Crates.io conflict)
 if ! cargo ndk --version &> /dev/null; then
-    echo -e "${YELLOW}Installing official cargo-ndk from GitHub...${NC}"
+    echo -e "${YELLOW}Installing official cargo-ndk v4.1.2...${NC}"
     cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
 else
-    # 验证是否是官方版本（避免已装错版本）
+    # Verify if it's the official version (supports --platform)
     if ! cargo ndk --help | grep -q "--platform"; then
-        echo -e "${YELLOW}Found invalid cargo-ndk, reinstalling official version...${NC}"
+        echo -e "${YELLOW}Invalid cargo-ndk found, reinstalling official version...${NC}"
         cargo uninstall cargo-ndk || true
         cargo install --git https://github.com/bbqsrc/cargo-ndk.git --tag v4.1.2 cargo-ndk --force
     fi
 fi
 
-# 关键：打印当前cargo-ndk的传参规则，云编译日志中可见
-echo -e "\n===== cargo-ndk 传参规则（当前版本 v4.1.2）====="
+# Print cargo-ndk help to confirm parameters (for debugging)
+echo -e "\n===== cargo-ndk Parameters (v4.1.2) ====="
 cargo ndk --help
-echo -e "===== 传参规则打印结束 ====="
+echo -e "===== Parameters End ====="
 
-# Check NDK_HOME or ANDROID_NDK_HOME
+# Check NDK path
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME or ANDROID_NDK_HOME not set${NC}"
-    echo "Please set one of these environment variables to your Android NDK path"
     exit 1
 fi
 export NDK_HOME="${NDK_HOME:-$ANDROID_NDK_HOME}"
 
-# Add Android targets if not already added
+# Add all Android targets
 echo "Adding Android targets..."
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android || true
 
-# Build for all Android architectures（修复：注释移到单独一行，避免语法错误）
+# Core build (fixed: --platform + -- separator + comment syntax)
 echo "Building for Android (all architectures)..."
 cargo ndk \
     -t arm64-v8a \
     -t armeabi-v7a \
     -t x86_64 \
     -t x86 \
-    # 匹配原作者的api_level=21（注释单独一行，不影响命令）
+    # Target Android API level 21 (matches original author's config)
     --platform 21 \
     -o bindings/android/src/main/jniLibs \
+    -- \ # Separator between cargo-ndk params and cargo commands
     build -p letta-ffi --profile mobile
 
-# Generate header file
+# Generate and copy C header file
 echo "Generating C header..."
 cargo build -p letta-ffi --features cbindgen
 if [ -f "ffi/include/letta_lite.h" ]; then
     cp ffi/include/letta_lite.h bindings/android/src/main/jni/
 else
-    echo -e "${RED}Error: letta_lite.h not found, cannot copy to JNI folder${NC}"
+    echo -e "${RED}Error: letta_lite.h not found in ffi/include/${NC}"
     exit 1
 fi
 
-# Compile JNI wrapper
+# Compile JNI wrapper for all architectures
 echo "Compiling JNI wrapper..."
-
-# Create output directories
 mkdir -p bindings/android/src/main/jniLibs/arm64-v8a
 mkdir -p bindings/android/src/main/jniLibs/armeabi-v7a
 mkdir -p bindings/android/src/main/jniLibs/x86_64
 mkdir -p bindings/android/src/main/jniLibs/x86
 
-# Build JNI wrapper for each architecture（修复Clang路径匹配，兼容不同NDK目录）
 compile_jni() {
     local arch=$1
     local triple=$2
     local api_level=21
-    
     echo "  Building JNI for $arch..."
-    
-    # 修复：精准匹配Clang路径（避免多prebuilt目录导致的错误）
+
+    # Auto-find Clang path (compatible with different NDK directories)
     CLANG_PATH=$(find "$NDK_HOME/toolchains/llvm/prebuilt/" -name "${triple}${api_level}-clang" | head -1)
     if [ -z "$CLANG_PATH" ]; then
-        echo -e "${RED}Error: Clang not found for $triple$api_level${NC}"
+        echo -e "${RED}Error: Clang not found for ${triple}${api_level}${NC}"
         exit 1
     fi
-    
+
+    # Java include path (compatible with common environments)
+    local JAVA_INCLUDE="${JAVA_HOME:-/usr/lib/jvm/default-java}/include"
+    [ ! -d "$JAVA_INCLUDE" ] && JAVA_INCLUDE="/usr/lib/jvm/java-11-openjdk-amd64/include"
+
     "$CLANG_PATH" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default-java}/include" \
-        -I"${JAVA_HOME:-/usr/lib/jvm/default-java}/include/linux" \
-        -I"${NDK_HOME}/sysroot/usr/include" \
-        -Iffi/include \
-        -shared \
-        -fPIC \
+        -I"$JAVA_INCLUDE" \
+        -I"$JAVA_INCLUDE/linux" \
+        -I"$NDK_HOME/sysroot/usr/include" \
+        -I"ffi/include" \
+        -shared -fPIC \
         -o "bindings/android/src/main/jniLibs/${arch}/libletta_jni.so" \
         bindings/android/src/main/jni/letta_jni.c \
         -L"bindings/android/src/main/jniLibs/${arch}" \
         -lletta_ffi \
-        -llog \ # 新增：链接Android日志库，避免运行时缺失
+        -llog \
         -ldl
 }
 
-# Only compile JNI if the C file exists
+# Compile JNI if source file exists
 if [ -f "bindings/android/src/main/jni/letta_jni.c" ]; then
     compile_jni "arm64-v8a" "aarch64-linux-android"
     compile_jni "armeabi-v7a" "armv7a-linux-androideabi"
     compile_jni "x86_64" "x86_64-linux-android"
     compile_jni "x86" "i686-linux-android"
 else
-    echo -e "${RED}Error: JNI wrapper (letta_jni.c) not found, cannot compile${NC}"
+    echo -e "${RED}Error: JNI source file (letta_jni.c) not found${NC}"
     exit 1
 fi
 
-# Build AAR if gradle is available
-if command -v gradle &> /dev/null || [ -f "bindings/android/gradlew" ]; then
-    echo "Building Android AAR..."
-    cd bindings/android
-    if [ -f "gradlew" ]; then
-        chmod +x gradlew
-        ./gradlew clean assembleRelease --no-daemon
-    else
-        gradle clean assembleRelease
-    fi
-    cd ../..
-    
-    AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
-    if [ -f "$AAR_PATH" ]; then
-        echo -e "${GREEN}Android build complete!${NC}"
-        echo ""
-        echo "AAR location: $AAR_PATH"
-    else
-        echo -e "${RED}Error: AAR file not generated${NC}"
-        exit 1
-    fi
+# Build Android AAR
+echo "Building Android AAR..."
+cd bindings/android
+if [ -f "gradlew" ]; then
+    chmod +x gradlew
+    ./gradlew clean assembleRelease --no-daemon
 else
-    echo -e "${GREEN}Android libraries built!${NC}"
-    echo ""
-    echo "Libraries location: bindings/android/src/main/jniLibs/"
+    echo -e "${RED}Error: gradlew not found in bindings/android${NC}"
+    exit 1
+fi
+cd ../..
+
+# Verify build result
+AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
+if [ -f "$AAR_PATH" ]; then
+    echo -e "\n${GREEN}✅ Android build successful!${NC}"
+    echo -e "📁 AAR Location: $AAR_PATH"
+else
+    echo -e "\n${RED}❌ Error: AAR file not generated${NC}"
+    exit 1
 fi
 
-echo ""
-echo "To use in your Android project:"
-echo "1. Add the AAR file to your project's libs folder"
-echo "2. Add to your app's build.gradle:"
+# Usage guide
+echo -e "\n📋 Usage Instructions:"
+echo "1. Copy the AAR file to your Android project's 'app/libs' folder"
+echo "2. Add to app/build.gradle:"
 echo "   dependencies {"
 echo "       implementation files('libs/android-release.aar')"
 echo "   }"
