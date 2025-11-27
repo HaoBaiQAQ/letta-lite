@@ -1,7 +1,8 @@
 name: 迎合脚本版：编译+发布Android 64位AAR
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发（必选，无语法问题）
   push:
+    branches: [main]
 jobs:
   build-with-script:
     runs-on: ubuntu-latest
@@ -52,7 +53,7 @@ jobs:
 
       - name: 执行编译脚本
         run: |
-          SCRIPT_PATH="./scripts/build-android-64bit.sh"
+          SCRIPT_PATH="./scripts/build-android-64bit.sh"  # 替换为你的脚本实际路径
           chmod +x "$SCRIPT_PATH"
           if [ ! -f "$SCRIPT_PATH" ]; then
             echo "❌ 脚本不存在：$SCRIPT_PATH"
@@ -60,7 +61,7 @@ jobs:
           fi
           "$SCRIPT_PATH"
 
-      - name: 收集产物
+      - name: 收集产物（无复杂表达式）
         run: |
           mkdir -p ${{ env.RELEASE_DIR }}
           AAR_SOURCE="bindings/android/build/outputs/aar/android-release.aar"
@@ -68,19 +69,20 @@ jobs:
             echo "❌ 未生成AAR"
             exit 1
           fi
-          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring:0,8 }}.aar"
+          # 产物名称用固定前缀，无哈希截取，避免语法错误
+          AAR_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit.aar"
           cp "$AAR_SOURCE" "$AAR_DEST"
           SO_SOURCE="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
           if [ -f "$SO_SOURCE" ]; then
-            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit-${{ github.sha | substring:0,8 }}.so"
+            SO_DEST="${{ env.RELEASE_DIR }}/letta-lite-64bit.so"
             cp "$SO_SOURCE" "$SO_DEST"
           fi
 
-      - name: 发布到Releases
+      - name: 发布到Releases（无复杂表达式）
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-64bit-script-${{ github.sha | substring:0,8 }}
-          name: "Letta-Lite Android 64位AAR（脚本编译版）"
+          tag_name: android-64bit-latest  # 固定标签，无哈希
+          name: "Letta-Lite Android 64位AAR（最新版）"
           body: |
             - 基于脚本原封不动编译
             - 架构：arm64-v8a，最小支持Android ${{ env.API_LEVEL }}
