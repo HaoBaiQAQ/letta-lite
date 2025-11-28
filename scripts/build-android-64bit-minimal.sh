@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 最终最终最终最终版（清理注释）..."
+echo "Building Letta Lite for Android (64-bit only) - 最终最终最终最终最终版（强制指定链接器）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -86,18 +86,19 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（清理注释，核心修复！）
-echo "Generating C header (清理无效注释)..."
-# 关键修改：删除字符串里的中文注释和多余符号，只保留纯粹参数
+# 🔧 步骤2：生成头文件（强制指定链接器，核心修复！）
+echo "Generating C header (强制指定手机专用链接器)..."
 export RUSTFLAGS="\
     --sysroot=${NDK_SYSROOT} \
     -L ${AARCH64_CORE_PATH} \
     -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
     -ldl -llog -lm -lc -lunwind \
 "
+# 关键新增：-C linker=... 强制指定 NDK 的 ld.lld，不用默认链接器
 cargo build -p letta-ffi \
     --target="${CARGO_TARGET}" \
-    --verbose
+    --verbose \
+    -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"
 # 验证头文件
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
