@@ -1,7 +1,6 @@
 name: Build Android Letta-Lite
 on:
-  push:
-  pull_request:
+
   workflow_dispatch:
 
 jobs:
