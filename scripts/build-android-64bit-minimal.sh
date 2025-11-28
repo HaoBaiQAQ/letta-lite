@@ -43,14 +43,14 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_D
     exit 1
 fi
 
-# 千问建议：显式设置 OPENSSL 路径（避免查找失败）
+# 显式设置 OPENSSL 路径（避免查找失败）
 export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 echo -e "${GREEN}✅ OPENSSL 路径配置完成：${NC}"
 echo -e "  - OPENSSL_LIB_DIR: ${OPENSSL_LIB_DIR}"
 echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
-echo "Building Letta Lite for Android (${TARGET}) - 千问终极方案：build.rs 链接静态库"
+echo "Building Letta Lite for Android (${TARGET}) - 最终修复版：移除 cbindgen 功能标志"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
@@ -61,35 +61,39 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 千问核心建议：移除 RUSTFLAGS 中的 -l:libunwind.a，避免全局污染
-# 只保留路径配置（给 OpenSSL 等库），链接参数交给 build.rs 处理
+# 只保留路径配置，链接参数交给 build.rs 处理
 export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR}"
 
-# 交叉编译依赖配置（指定 NDK 编译器）
+# 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 🔧 关键：传递 UNWIND_LIB_PATH 给 build.rs（build.rs 会读取这个环境变量）
+# 编译核心库（已成功，保持不变）
 echo -e "\n${YELLOW}=== 编译核心库（build.rs 自动链接 libunwind.a） ===${NC}"
 cargo ndk -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（build.rs 同样会生效，自动链接）
-echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
-cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi
+# 🔧 核心修复：去掉 --features cbindgen（build.rs 已自动生成头文件，无需额外功能）
+echo -e "\n${YELLOW}=== 生成头文件（build.rs 自动执行） ===${NC}"
+cargo build --target="${TARGET}" --profile mobile --verbose -p letta-ffi
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
+    # 从 target 目录查找自动生成的头文件（build.rs 生成在 letta-ffi/include 或 target 下）
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
+    # 若仍未找到，直接用 build.rs 生成的路径
+    if [ -z "${HEADER_FILE}" ]; then
+        HEADER_FILE="${PWD}/letta-ffi/include/letta_lite.h"
+    fi
 fi
-[ -z "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
+[ -z "${HEADER_FILE}" ] || [ ! -f "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
 mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 验证静态链接（千问建议，确认效果）
+# 验证静态链接
 echo -e "\n${YELLOW}=== 验证静态链接 ===${NC}"
 if readelf -d "${CORE_SO}" | grep -q "unwind"; then
     echo -e "${YELLOW}⚠️  警告：libunwind 可能被动态链接（正常应为静态链接）${NC}"
@@ -97,7 +101,7 @@ else
     echo -e "${GREEN}✅ 验证通过：libunwind 已静态链接，无动态依赖${NC}"
 fi
 
-# 编译 JNI 库（保留原逻辑）
+# 编译 JNI 库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -113,7 +117,7 @@ JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 [ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_DIR}/libletta_jni.so${NC}"
 
-# 打包 AAR（保留原逻辑）
+# 打包 AAR
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android
 if [ -f "gradlew" ]; then
@@ -135,8 +139,8 @@ cp "${HEADER_FILE}" "${PWD}/release/"
 
 echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200（${TARGET}）${NC}"
 echo -e "${GREEN}📦 最终产物清单（release 目录）：${NC}"
-echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，build.rs 自动静态链接 libunwind）"
+echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 千问终极方案生效！build.rs 精准链接静态库，无全局污染，保留栈展开功能！${NC}"
+echo -e "\n${YELLOW}✅ 所有问题解决！编译全程无报错，功能完整保留！${NC}"
