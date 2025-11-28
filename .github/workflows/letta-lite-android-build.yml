@@ -90,6 +90,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
+      - name: 打印 E0463 错误详情（定位依赖编译失败根源）
+        run: rustc --explain E0463
+
       - name: Prepare 64bit-only build script
         run: |
           # 确保脚本有执行权限
