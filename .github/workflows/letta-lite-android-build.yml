@@ -87,15 +87,21 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
+      - name: 验证 aarch64 目标架构是否安装成功（核心！）
+        run: |
+          rustup target list | grep "aarch64-linux-android"
+          if rustup target list | grep -q "aarch64-linux-android (installed)"; then
+            echo "✅ aarch64-linux-android 目标架构已安装"
+          else
+            echo "❌ aarch64-linux-android 目标架构未安装，手动安装..."
+            rustup target install aarch64-linux-android
+          fi
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 打印 E0463 错误详情（定位依赖编译失败根源）
-        run: rustc --explain E0463
-
       - name: Prepare 64bit-only build script
         run: |
-          # 确保脚本有执行权限
           chmod +x ./scripts/build-android-64bit-minimal.sh
 
       - name: Execute 64bit-only build script (generate SO + AAR)
@@ -109,7 +115,6 @@ jobs:
       - name: Collect artifacts (SO + AAR + log)
         run: |
           mkdir -p ./release
-          # 全局查找AAR（作者脚本输出路径）
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | grep -E "release|android-release" | head -n 1)
           if [ -n "$AAR_FILE" ]; then
             cp "$AAR_FILE" ./release/letta-lite-android.aar
@@ -118,7 +123,6 @@ jobs:
             echo "❌ AAR not found, check build.log"
             exit 1
           fi
-          # 全局查找SO
           SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" -type f | grep -E "arm64|aarch64" | head -n 1)
           if [ -n "$SO_FILE" ]; then
             cp "$SO_FILE" ./release/letta-lite-jni.so
@@ -127,7 +131,6 @@ jobs:
             echo "❌ SO not found, check build.log"
             exit 1
           fi
-          # 复制日志
           cp ./build.log ./release/build.log
           ls -l ./release/
 
