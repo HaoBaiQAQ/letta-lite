@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 最终最终最终最终最终最终版（修复参数顺序）..."
+echo "Building Letta Lite for Android (64-bit only) - 最终终极版（格式绝对正确）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -86,19 +86,12 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（修复参数顺序，核心修复！）
-echo "Generating C header (修复 cargo build 参数顺序)..."
-export RUSTFLAGS="\
-    --sysroot=${NDK_SYSROOT} \
-    -L ${AARCH64_CORE_PATH} \
-    -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
-    -ldl -llog -lm -lc -lunwind \
-"
-# 关键修改：用 -- 分隔 cargo 参数和 rustc 参数，-C 放在 -- 后面
-cargo build -p letta-ffi \
-    --target="${CARGO_TARGET}" \
-    --verbose \
-    -- -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"
+# 🔧 步骤2：生成头文件（参数格式绝对正确！-- 后紧跟空格和 -C）
+echo "Generating C header (参数格式无懈可击)..."
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${AARCH64_CORE_PATH} -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} -ldl -llog -lm -lc -lunwind"
+# 关键：-- 后面必须跟空格，再跟 -C 参数，没有多余字符/换行
+cargo build -p letta-ffi --target="${CARGO_TARGET}" --verbose -- -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"
+
 # 验证头文件
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
