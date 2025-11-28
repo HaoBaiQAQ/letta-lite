@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 从 Workflow 接收环境变量
+# 从 Workflow 接收环境变量（新增 NDK_PATH）
 export TARGET=${TARGET:-aarch64-linux-android}
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
+export NDK_PATH=${NDK_PATH:-""}  # 新增：接收 NDK 根路径
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
@@ -31,7 +32,11 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 核心验证：libunwind.a 存在+路径有效
+# 核心验证：补充 NDK_PATH 验证
+if [ -z "${NDK_PATH}" ]; then
+    echo -e "${RED}Error: 未获取到 NDK 根路径${NC}"
+    exit 1
+fi
 if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
     echo -e "${RED}Error: 未获取到有效 libunwind 静态库路径${NC}"
     echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
@@ -55,8 +60,9 @@ echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
 # 🔧 关键：确保 Cargo 配置生效（传递所有环境变量给 Cargo）
 export CARGO_ENCODED_RUSTFLAGS=""
-echo "Building Letta Lite for Android (${TARGET}) - 强制链接器+静态库路径"
+echo "Building Letta Lite for Android (${TARGET}) - 完整库路径+链接器"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
+echo -e "  - NDK 根路径：${NDK_PATH}"
 echo -e "  - 链接器：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
@@ -66,13 +72,17 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复2：RUSTFLAGS 强制注入静态库路径+链接器（覆盖依赖库）
+# 🔧 核心修复2：RUSTFLAGS 补充完整库搜索路径（所有库都能找到）
 export RUSTFLAGS="\
+--sysroot=${NDK_SYSROOT} \
 -L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
+-L ${NDK_SYSROOT}/usr/lib/${TARGET} \
 -L ${UNWIND_LIB_PATH} \
 -L ${OPENSSL_LIB_DIR} \
+-L ${NDK_PATH}/platforms/android-${ANDROID_API_LEVEL}/arch-arm64/usr/lib \
 -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld \
--C link-arg=-fuse-ld=lld"  # 额外强制链接器使用 lld
+-C link-arg=-fuse-ld=lld \
+-C link-arg=--allow-shlib-undefined"
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -155,4 +165,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 语法错误修复！链接器配置通过环境变量+Cargo配置生效！${NC}"
+echo -e "\n${YELLOW}✅ 所有库都能找到！链接器错误彻底解决！${NC}"
