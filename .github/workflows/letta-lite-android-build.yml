@@ -35,7 +35,7 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 终极精准定位 libunwind 路径（适配纯数字版本号）
+      - name: 终极解决 libunwind（用静态库 libunwind.a）
         run: |
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
@@ -44,30 +44,28 @@ jobs:
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
           [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
           
-          # 2. 精准拼接 clang 路径（lib 而非 lib64，基于日志）
+          # 2. 精准拼接 clang 路径
           CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang"
           [ ! -d "$CLANG_ROOT" ] && { echo "❌ CLANG_ROOT 不存在：$CLANG_ROOT"; exit 1; }
           
-          # 3. 核心修复：不限制版本号格式，直接取第一个目录（NDK 27 是纯数字 18）
+          # 3. 取纯数字版本目录（NDK 27 是 18）
           CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
-          [ -z "$CLANG_VERSION" ] && { echo "❌ 未找到 clang 版本目录，当前目录内容："; ls -la "$CLANG_ROOT"; exit 1; }
+          [ -z "$CLANG_VERSION" ] && { echo "❌ 未找到 clang 版本目录"; exit 1; }
           
-          # 4. 最终定位 libunwind.so
+          # 4. 验证静态库 libunwind.a 存在（核心修复：用.a替代.so）
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
-          [ ! -f "$UNWIND_LIB_PATH/libunwind.so" ] && { echo "❌ libunwind.so 未找到，路径：$UNWIND_LIB_PATH"; ls -la "$UNWIND_LIB_PATH"; exit 1; }
+          UNWIND_LIB_FILE="$UNWIND_LIB_PATH/libunwind.a"
+          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到，路径：$UNWIND_LIB_PATH"; ls -la "$UNWIND_LIB_PATH"; exit 1; }
           
-          # 传递关键路径到环境变量
+          # 传递路径和库文件名到环境变量
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
+          echo "UNWIND_LIB_FILE=$UNWIND_LIB_FILE" >> $GITHUB_ENV
           
-          # 输出成功信息
-          echo "✅ 所有路径 100% 命中："
-          echo "  - NDK_PATH: $NDK_PATH"
-          echo "  - CLANG_ROOT: $CLANG_ROOT"
-          echo "  - CLANG_VERSION: $CLANG_VERSION"
+          echo "✅ 所有配置 100% 命中："
           echo "  - UNWIND_LIB_PATH: $UNWIND_LIB_PATH"
-          echo "✅ libunwind.so 验证存在：$(ls -la "$UNWIND_LIB_PATH/libunwind.so")"
+          echo "  - 已找到静态库：$UNWIND_LIB_FILE"
 
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
@@ -105,7 +103,7 @@ jobs:
         run: |
           chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script (generate SO + AAR)
+      - name: Execute 64bit-only build script (用静态库链接)
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
@@ -114,6 +112,7 @@ jobs:
           export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
           export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
+          export UNWIND_LIB_FILE=${{ env.UNWIND_LIB_FILE }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
           
