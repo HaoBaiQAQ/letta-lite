@@ -35,39 +35,22 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递 NDK_PATH）
+      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递路径）
         run: |
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
-          
-          # 1. 找到 NDK 根路径（传递给脚本）
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
           [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
-          
-          # 2. 精准拼接 clang 路径
           CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang"
-          [ ! -d "$CLANG_ROOT" ] && { echo "❌ CLANG_ROOT 不存在：$CLANG_ROOT"; exit 1; }
-          
-          # 3. 取纯数字版本目录（NDK 27 是 18）
           CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
-          [ -z "$CLANG_VERSION" ] && { echo "❌ 未找到 clang 版本目录"; exit 1; }
-          
-          # 4. 验证静态库 libunwind.a 存在
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
           UNWIND_LIB_FILE="$UNWIND_LIB_PATH/libunwind.a"
-          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到，路径：$UNWIND_LIB_PATH"; ls -la "$UNWIND_LIB_PATH"; exit 1; }
-          
-          # 传递所有必要路径到环境变量（含 NDK_PATH）
+          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到"; exit 1; }
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
-          echo "UNWIND_LIB_FILE=$UNWIND_LIB_FILE" >> $GITHUB_ENV
-          
-          echo "✅ 所有配置 100% 命中："
-          echo "  - NDK_PATH: $NDK_PATH"
-          echo "  - UNWIND_LIB_PATH: $UNWIND_LIB_PATH"
-          echo "  - 已找到静态库：$UNWIND_LIB_FILE"
+          echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
@@ -76,21 +59,12 @@ jobs:
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
-          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-          export PATH="$NDK_TOOLCHAIN_BIN:$PATH"
           ./Configure android-arm64 no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -fPIC -march=armv8-a \
-            CC=$CC CXX=$CXX AR=$AR RANLIB=$RANLIB LD=$LD
-          make -j$(nproc) V=1
-          make install_sw
-          echo "✅ OpenSSL 编译成功"
-          LIB_PATH="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
-          file "$LIB_PATH" | grep -qE "aarch64|64-bit ARM" && echo "✅ OpenSSL 架构验证成功" || echo "⚠️ OpenSSL 架构输出：$(file "$LIB_PATH")"
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} --sysroot=${{ env.NDK_SYSROOT }} -fPIC
+          make -j$(nproc) V=1 && make install_sw
+          echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
       - name: Configure Rust environment
         uses: dtolnay/rust-toolchain@stable
@@ -98,15 +72,14 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 强制设置全局链接器（解决依赖库 slug 编译）
+      - name: 强制设置全局链接器
         run: |
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" >> $GITHUB_ENV
-          echo "✅ 全局链接器已设置为：${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Create Cargo config（完整库路径+链接参数）
+      - name: Create Cargo config（双重保障）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
@@ -114,58 +87,52 @@ jobs:
           rustflags = [
               "--sysroot=${env:NDK_SYSROOT}",
               "-L", "${env:NDK_SYSROOT}/usr/lib/${env:TARGET_ARCH}/${env:ANDROID_API_LEVEL}",
-              "-L", "${env:NDK_SYSROOT}/usr/lib/${env:TARGET_ARCH}",
               "-L", "${env:UNWIND_LIB_PATH}",
               "-L", "${env:OPENSSL_INSTALL_DIR}/lib",
               "-l:libunwind.a",
-              "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld",
-              "-C", "link-arg=-fuse-ld=lld",
-              "-C", "link-arg=--allow-shlib-undefined"
+              "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld"
           ]
           EOF
 
-      - name: Prepare 64bit-only build script
+      - name: 全局注入库路径（关键！确保依赖库能找到）
         run: |
-          chmod +x ./scripts/build-android-64bit-minimal.sh
+          echo "RUSTFLAGS=--sysroot=${{ env.NDK_SYSROOT }} \
+-L ${{ env.NDK_SYSROOT }}/usr/lib/${{ env.TARGET_ARCH }}/${{ env.ANDROID_API_LEVEL }} \
+-L ${{ env.UNWIND_LIB_PATH }} \
+-L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
+-l:libunwind.a \
+-l:libdl.so \
+-l:liblog.so \
+-l:libm.so \
+-l:libc.so \
+-C link-arg=--allow-shlib-undefined" >> $GITHUB_ENV
 
-      - name: Execute 64bit-only build script（传递所有环境变量）
+      - name: Prepare 64bit-only build script
+        run: chmod +x ./scripts/build-android-64bit-minimal.sh
+
+      - name: Execute 64bit-only build script（一键编译）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
-          export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
-          export PKG_CONFIG_ALLOW_CROSS=1
           export NDK_PATH=${{ env.NDK_PATH }}
           export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
           export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
-          export UNWIND_LIB_FILE=${{ env.UNWIND_LIB_FILE }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld
-          
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
       - name: Collect artifacts (SO + AAR + log)
         run: |
           mkdir -p ./release
-          AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | grep -E "release|android-release" | head -n 1)
-          if [ -n "$AAR_FILE" ]; then
-            cp "$AAR_FILE" ./release/letta-lite-android.aar
-            echo "✅ AAR 找到：$AAR_FILE"
-          else
-            echo "❌ AAR 未找到，查看 build.log"
-            exit 1
-          fi
-          SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" -type f | grep -E "arm64|aarch64" | head -n 1)
-          if [ -n "$SO_FILE" ]; then
-            cp "$SO_FILE" ./release/letta-lite-jni.so
-            echo "✅ SO 找到：$SO_FILE"
-          else
-            echo "❌ SO 未找到，查看 build.log"
-            exit 1
-          fi
+          AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" | grep -E "release" | head -n 1)
+          SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" | grep -E "arm64" | head -n 1)
+          [ -z "$AAR_FILE" ] && { echo "❌ AAR 未找到"; exit 1; }
+          [ -z "$SO_FILE" ] && { echo "❌ SO 未找到"; exit 1; }
+          cp "$AAR_FILE" ./release/letta-lite-android.aar
+          cp "$SO_FILE" ./release/letta-lite-jni.so
           cp ./build.log ./release/build.log
-          ls -l ./release/
+          echo "✅ 产物收集完成：$(ls -l ./release/)"
 
       - name: Upload to Artifacts (direct download)
         uses: actions/upload-artifact@v4
