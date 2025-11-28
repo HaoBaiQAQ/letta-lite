@@ -100,23 +100,18 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # ===================== 重点：显眼的 help 打印步骤 =====================
-      - name: 打印 cargo build help（找 -- 用法）
+      # 自动打印 help，不用你管，能看到官方说明
+      - name: 自动打印 -- 用法（不用懂，看日志就行）
         run: |
-          echo "========================================"
-          echo "========== cargo build --help =========="
-          echo "========================================"
-          # 直接打印所有和 "--" 相关的帮助内容，不过滤，确保你能看到
-          cargo build --help | grep -B 1 -A 5 "--"
-          echo "========================================"
-          echo "======= 上面就是 -- 的官方用法说明 ======="
-          echo "========================================"
+          echo "===== 官方 -- 用法说明 ====="
+          cargo build --help | grep -B 2 -A 3 -- "--"
+          echo "==========================="
 
       - name: Prepare 64bit-only build script
         run: |
           chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script (generate SO + AAR)
+      - name: 执行编译（自动生成所有产物）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
@@ -124,29 +119,29 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
-      - name: Collect artifacts (SO + AAR + log)
+      - name: 收集产物（AAR + SO + 日志）
         run: |
           mkdir -p ./release
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | grep -E "release|android-release" | head -n 1)
           if [ -n "$AAR_FILE" ]; then
             cp "$AAR_FILE" ./release/letta-lite-android.aar
-            echo "✅ AAR found: $AAR_FILE"
+            echo "✅ AAR 产物生成成功！"
           else
-            echo "❌ AAR not found, check build.log"
+            echo "❌ AAR 未找到"
             exit 1
           fi
           SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" -type f | grep -E "arm64|aarch64" | head -n 1)
           if [ -n "$SO_FILE" ]; then
             cp "$SO_FILE" ./release/letta-lite-jni.so
-            echo "✅ SO found: $SO_FILE"
+            echo "✅ SO 产物生成成功！"
           else
-            echo "❌ SO not found, check build.log"
+            echo "❌ SO 未找到"
             exit 1
           fi
           cp ./build.log ./release/build.log
           ls -l ./release/
 
-      - name: Upload to Artifacts (direct download)
+      - name: 上传产物（直接下载用）
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
