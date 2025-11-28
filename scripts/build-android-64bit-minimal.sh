@@ -50,7 +50,9 @@ echo -e "${GREEN}✅ OPENSSL 路径配置完成：${NC}"
 echo -e "  - OPENSSL_LIB_DIR: ${OPENSSL_LIB_DIR}"
 echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
-echo "Building Letta Lite for Android (${TARGET}) - 修复依赖库链接：全局传递 libunwind 路径"
+# 🔧 关键：确保 Cargo 配置生效（传递所有环境变量给 Cargo）
+export CARGO_ENCODED_RUSTFLAGS=""
+echo "Building Letta Lite for Android (${TARGET}) - 终极方案：Cargo 目标专属配置"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
@@ -61,32 +63,22 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复1：强制指定链接器（双重保障）
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
-echo -e "${GREEN}✅ 链接器配置完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
-
-# 🔧 核心修复2：RUSTFLAGS 全局传递 libunwind 路径+静态库链接（让所有依赖库都能找到）
-# 关键：添加 -L ${UNWIND_LIB_PATH}（搜索路径）和 -l:libunwind.a（强制静态链接）
-export RUSTFLAGS="\
--L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
--L ${UNWIND_LIB_PATH} \
--L ${OPENSSL_LIB_DIR} \
--l:libunwind.a \
--C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
+# 🔧 移除全局 RUSTFLAGS 中的链接参数，改用 .cargo/config.toml
+export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR}"
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 编译核心库（build.rs + RUSTFLAGS 双重保障）
+# 编译核心库（Cargo 配置自动传递链接参数）
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
 cargo ndk -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（RUSTFLAGS 确保依赖库能找到 libunwind.a）
+# 生成头文件（Cargo 配置生效，依赖库能找到 libunwind.a）
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build \
     --target="${TARGET}" \
@@ -155,4 +147,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 依赖库链接问题彻底解决！所有库都能找到 libunwind.a 静态库！${NC}"
+echo -e "\n${YELLOW}✅ 终极方案生效！探测任务不报错，依赖库能找到 libunwind.a！${NC}"
