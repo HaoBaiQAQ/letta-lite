@@ -9,10 +9,6 @@ export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export UNWIND_LIB_FILE=${UNWIND_LIB_FILE:-""}
-export OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR:-""}
-
-# 绕开 -- -C 参数传递 bug（开源项目通用方案）
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 颜色配置
 RED='\033[0;31m'
@@ -47,36 +43,47 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_D
     exit 1
 fi
 
-echo "Building Letta Lite for Android (${TARGET}) - 最终规范版：修正静态库链接语法"
+# 🔧 千问建议：显式设置 OPENSSL 库和头文件路径（避免查找失败）
+export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
+export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
+echo -e "${GREEN}✅ OPENSSL 路径配置完成：${NC}"
+echo -e "  - OPENSSL_LIB_DIR: ${OPENSSL_LIB_DIR}"
+echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
+
+echo "Building Letta Lite for Android (${TARGET}) - 千问优化版：RUSTFLAGS 统一传递参数"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
-echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
+echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
 
 # 安装目标平台标准库
 echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# RUSTFLAGS 只保留路径（正确配置）
-export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_LIB_DIR}"
+# 🔧 千问核心建议：RUSTFLAGS 统一传递路径+链接参数（绕开 cargo ndk 透传问题）
+export RUSTFLAGS="\
+-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
+-L ${UNWIND_LIB_PATH} \
+-L ${OPENSSL_LIB_DIR} \
+-l:libunwind.a"  # 用 -l:libunwind.a 兼容性更好，避免 -lstatic=unwind 的解析问题
 
-# 交叉编译依赖配置
+# 交叉编译依赖配置（指定 NDK 编译器）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
-export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 🔧 核心修正：把 -l:libunwind.a 改成 -lstatic=unwind（Rustc 规范静态库语法）
+# 🔧 千问建议：去掉 -- 后的参数，使用 RUSTFLAGS 传递，避免透传问题
+# 输出路径用绝对路径，避免相对路径解析错误
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build --profile mobile --verbose -p letta-ffi -- -lstatic=unwind
-CORE_SO="bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
+cargo ndk -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
+CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 🔧 同样修正头文件生成命令
+# 🔧 生成头文件：同样去掉 -- 后的参数，依赖 RUSTFLAGS
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
-cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi -- -lstatic=unwind
+cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
@@ -86,9 +93,17 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
+# 🔧 千问建议：添加构建后验证（确认静态链接成功）
+echo -e "\n${YELLOW}=== 验证静态链接 ===${NC}"
+if readelf -d "${CORE_SO}" | grep -q "unwind"; then
+    echo -e "${YELLOW}⚠️  警告：libunwind 可能被动态链接（正常应为静态链接）${NC}"
+else
+    echo -e "${GREEN}✅ 验证通过：libunwind 已静态链接，无动态依赖${NC}"
+fi
+
 # 编译 JNI 库（完全保留原作者逻辑）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
-JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
+JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
     --sysroot="${NDK_SYSROOT}" \
     -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
@@ -116,16 +131,16 @@ AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 echo -e "${GREEN}✅ AAR 打包成功：${AAR_PATH}${NC}"
 
 # 收集产物（统一输出到 release 目录）
-mkdir -p ./release
-cp "${CORE_SO}" ./release/
-cp "${JNI_DIR}/libletta_jni.so" ./release/
-cp "${AAR_PATH}" ./release/
-cp "${HEADER_FILE}" ./release/
+mkdir -p "${PWD}/release"
+cp "${CORE_SO}" "${PWD}/release/"
+cp "${JNI_DIR}/libletta_jni.so" "${PWD}/release/"
+cp "${AAR_PATH}" "${PWD}/release/"
+cp "${HEADER_FILE}" "${PWD}/release/"
 
 echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200（${TARGET}）${NC}"
 echo -e "${GREEN}📦 最终产物清单（release 目录）：${NC}"
-echo -e "  1. libletta_ffi.so（Letta-Lite 核心库）"
+echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 规范链接语法！保留栈展开功能，Rustc 能正确识别静态库！${NC}"
+echo -e "\n${YELLOW}✅ 千问优化方案生效！通过 RUSTFLAGS 传递参数，彻底避免透传问题，保留栈展开功能！${NC}"
