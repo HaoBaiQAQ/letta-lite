@@ -94,18 +94,9 @@ jobs:
           ]
           EOF
 
+      # 🔧 修复 YAML 语法：RUSTFLAGS 改成单行字符串，去掉换行和反斜杠
       - name: 全局注入库路径（关键！确保依赖库能找到）
-        run: |
-          echo "RUSTFLAGS=--sysroot=${{ env.NDK_SYSROOT }} \
--L ${{ env.NDK_SYSROOT }}/usr/lib/${{ env.TARGET_ARCH }}/${{ env.ANDROID_API_LEVEL }} \
--L ${{ env.UNWIND_LIB_PATH }} \
--L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
--l:libunwind.a \
--l:libdl.so \
--l:liblog.so \
--l:libm.so \
--l:libc.so \
--C link-arg=--allow-shlib-undefined" >> $GITHUB_ENV
+        run: echo "RUSTFLAGS=--sysroot=${{ env.NDK_SYSROOT }} -L ${{ env.NDK_SYSROOT }}/usr/lib/${{ env.TARGET_ARCH }}/${{ env.ANDROID_API_LEVEL }} -L ${{ env.UNWIND_LIB_PATH }} -L ${{ env.OPENSSL_INSTALL_DIR }}/lib -l:libunwind.a -l:libdl.so -l:liblog.so -l:libm.so -l:libc.so -C link-arg=--allow-shlib-undefined" >> $GITHUB_ENV
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
