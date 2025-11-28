@@ -96,10 +96,16 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
+      # 🔧 新增：强制设置全局链接器（解决依赖库 slug 编译）
+      - name: Force NDK linker for all Rust builds
+        run: |
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" >> $GITHUB_ENV
+          echo "✅ 全局链接器已设置为：${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 新增：创建 Cargo 专属配置（解决探测任务 "库名不能为空" 报错）
+      # 🔧 保留：Cargo 专属配置（解决探测任务报错 + 补充链接参数）
       - name: Create Cargo config (fix rustc detection error)
         run: |
           mkdir -p .cargo
@@ -110,7 +116,8 @@ jobs:
               "-L", "${env:UNWIND_LIB_PATH}",
               "-L", "${env:OPENSSL_INSTALL_DIR}/lib",
               "-l:libunwind.a",
-              "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld"
+              "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld",
+              "-C", "link-arg=-fuse-ld=lld"  # 额外强化链接器
           ]
           EOF
 
@@ -130,6 +137,8 @@ jobs:
           export UNWIND_LIB_FILE=${{ env.UNWIND_LIB_FILE }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
+          # 传递全局链接器环境变量到脚本
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld
           
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
