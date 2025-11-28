@@ -47,7 +47,7 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_D
     exit 1
 fi
 
-echo "Building Letta Lite for Android (${TARGET}) - 方案2修正版：正确传递参数"
+echo "Building Letta Lite for Android (${TARGET}) - 最终规范版：修正静态库链接语法"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
@@ -67,16 +67,16 @@ export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 🔧 核心修复：调整参数顺序，-- 放在所有选项最后（给 rustc 传参数）
+# 🔧 核心修正：把 -l:libunwind.a 改成 -lstatic=unwind（Rustc 规范静态库语法）
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build --profile mobile --verbose -p letta-ffi -- -l:libunwind.a
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build --profile mobile --verbose -p letta-ffi -- -lstatic=unwind
 CORE_SO="bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 🔧 同样修复头文件生成命令的参数顺序
+# 🔧 同样修正头文件生成命令
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
-cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi -- -l:libunwind.a
+cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi -- -lstatic=unwind
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
@@ -128,4 +128,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 方案2修正版成功！参数传递符合 cargo ndk 规则，保留栈展开功能！${NC}"
+echo -e "\n${YELLOW}✅ 规范链接语法！保留栈展开功能，Rustc 能正确识别静态库！${NC}"
