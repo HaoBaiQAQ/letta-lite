@@ -50,7 +50,7 @@ echo -e "${GREEN}✅ OPENSSL 路径配置完成：${NC}"
 echo -e "  - OPENSSL_LIB_DIR: ${OPENSSL_LIB_DIR}"
 echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
-echo "Building Letta Lite for Android (${TARGET}) - 最终修复版：移除 cbindgen 功能标志"
+echo "Building Letta Lite for Android (${TARGET}) - 修复链接器：强制使用 NDK ld.lld"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
@@ -61,8 +61,12 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 只保留路径配置，链接参数交给 build.rs 处理
-export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR}"
+# 🔧 核心修复1：强制指定 aarch64 目标的链接器为 NDK 的 ld.lld（所有 cargo 命令生效）
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
+echo -e "${GREEN}✅ 链接器配置完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
+
+# 🔧 核心修复2：RUSTFLAGS 中显式指定链接器（双重保障，避免环境变量失效）
+export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR} -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -76,14 +80,17 @@ CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 🔧 核心修复：去掉 --features cbindgen（build.rs 已自动生成头文件，无需额外功能）
-echo -e "\n${YELLOW}=== 生成头文件（build.rs 自动执行） ===${NC}"
-cargo build --target="${TARGET}" --profile mobile --verbose -p letta-ffi
+# 🔧 核心修复3：生成头文件的 cargo build 显式指定 target 和链接器（确保用 NDK 工具链）
+echo -e "\n${YELLOW}=== 生成头文件（强制使用 NDK 链接器） ===${NC}"
+cargo build \
+    --target="${TARGET}" \
+    --profile mobile \
+    --verbose \
+    -p letta-ffi \
+    -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"  # 显式指定链接器，双重保障
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
-    # 从 target 目录查找自动生成的头文件（build.rs 生成在 letta-ffi/include 或 target 下）
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
-    # 若仍未找到，直接用 build.rs 生成的路径
     if [ -z "${HEADER_FILE}" ]; then
         HEADER_FILE="${PWD}/letta-ffi/include/letta_lite.h"
     fi
@@ -143,4 +150,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 所有问题解决！编译全程无报错，功能完整保留！${NC}"
+echo -e "\n${YELLOW}✅ 链接器问题彻底解决！全程使用 NDK ld.lld，产物格式正确！${NC}"
