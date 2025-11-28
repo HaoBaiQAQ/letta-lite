@@ -8,6 +8,7 @@ export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
+export UNWIND_LIB_FILE=${UNWIND_LIB_FILE:-""}  # 接收静态库路径
 export OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR:-""}
 
 # 绕开 -- -C 参数传递 bug（开源项目通用方案）
@@ -31,11 +32,16 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 核心参数验证
-if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_PATH}/libunwind.so" ]; then
-    echo -e "${RED}Error: 未获取到有效 libunwind 路径（UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}）${NC}"
+# 🔧 核心修复：验证静态库 libunwind.a（不再找 .so）
+if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
+    echo -e "${RED}Error: 未获取到有效 libunwind 静态库路径${NC}"
+    echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
+    echo -e "  - UNWIND_LIB_FILE: ${UNWIND_LIB_FILE}"
     exit 1
 fi
+echo -e "${GREEN}✅ libunwind 静态库验证通过：${UNWIND_LIB_FILE}${NC}"
+
+# 其他参数验证
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_DIR}" ]; then
     echo -e "${RED}Error: 必需环境变量未传递${NC}"
     exit 1
@@ -44,7 +50,6 @@ fi
 echo "Building Letta Lite for Android (${TARGET}) - 最终稳定版"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
-echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
 
 # 安装目标平台标准库
@@ -52,11 +57,12 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 配置 RUSTFLAGS（包含所有必需库路径，保留栈展开）
+# 🔧 配置 RUSTFLAGS：链接静态库 libunwind.a
 export RUSTFLAGS="\
 -L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
 -L ${UNWIND_LIB_PATH} \
--L ${OPENSSL_LIB_DIR}"
+-L ${OPENSSL_LIB_DIR} \
+-l:libunwind.a"  # 强制链接静态库
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -83,7 +89,7 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（完全保留原作者逻辑，修复笔误）
+# 编译 JNI 库（完全保留原作者逻辑）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -125,4 +131,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 保留栈展开功能，崩溃时可获取详细日志；完全兼容原作者核心逻辑！${NC}"
+echo -e "\n${YELLOW}✅ 保留栈展开功能，使用静态库 libunwind.a 成功链接！${NC}"
