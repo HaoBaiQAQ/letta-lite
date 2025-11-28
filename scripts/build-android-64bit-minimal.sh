@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 最终终极版（格式绝对正确）..."
+echo "Building Letta Lite for Android (64-bit only) - 根源修复版（不绕路）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -32,19 +32,10 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
     exit 1
 fi
 
-# 🔧 2. 获取 Rust 系统根目录（关键！找到 core 库存放路径）
-RUST_SYSROOT=$(rustc --print sysroot)
-AARCH64_CORE_PATH="${RUST_SYSROOT}/lib/rustlib/${CARGO_TARGET}/lib"
-if [ ! -d "${AARCH64_CORE_PATH}" ]; then
-    echo -e "${RED}Error: aarch64 core 库路径不存在：${AARCH64_CORE_PATH}${NC}"
-    echo "✅ 正在手动安装 aarch64 目标架构..."
-    rustup target install "${CARGO_TARGET}"
-    if [ ! -d "${AARCH64_CORE_PATH}" ]; then
-        echo -e "${RED}Error: 安装后仍未找到 core 库，编译失败${NC}"
-        exit 1
-    fi
-fi
-echo -e "${GREEN}✅ core 库路径确认：${AARCH64_CORE_PATH}${NC}"
+# 🔧 2. 清理可能被 cargo ndk 污染的环境变量（核心！）
+# 移除之前设置的链接器配置，避免和手动传递的 -C linker 冲突
+unset CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER 2>/dev/null
+echo -e "${GREEN}✅ 清理污染的环境变量完成${NC}"
 
 # 🔧 3. 配置交叉编译器（仅给 openssl-sys 用，不影响 linker）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${CARGO_TARGET}${ANDROID_API_LEVEL}-clang"
@@ -53,7 +44,7 @@ if [ ! -f "${CC_aarch64_linux_android}" ]; then
     echo -e "${RED}Error: 交叉编译器不存在：${CC_aarch64_linux_android}${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ 交叉编译器配置完成：${CC_aarch64_linux_android}${NC}"
+echo -e "${GREEN}✅ 交叉编译器配置完成${NC}"
 
 # 🔧 4. 配置 OpenSSL（不变）
 if [ -z "${OPENSSL_DIR:-}" ]; then
@@ -63,7 +54,7 @@ fi
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
 export PKG_CONFIG_ALLOW_CROSS=1
-echo -e "${GREEN}✅ OpenSSL 配置完成：${OPENSSL_DIR}${NC}"
+echo -e "${GREEN}✅ OpenSSL 配置完成${NC}"
 
 # 🔧 5. 安装 cargo-ndk（不变）
 if ! cargo ndk --version &> /dev/null; then
@@ -86,10 +77,13 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（参数格式绝对正确！-- 后紧跟空格和 -C）
-echo "Generating C header (参数格式无懈可击)..."
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${AARCH64_CORE_PATH} -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} -ldl -llog -lm -lc -lunwind"
-# 关键：-- 后面必须跟空格，再跟 -C 参数，没有多余字符/换行
+# 🔧 步骤2：生成头文件（根源修复！极简参数传递，不绕路）
+echo "Generating C header (根源修复参数传递)..."
+# 核心修改：
+# 1. 清理 RUSTFLAGS，只保留必要的 sysroot 和库路径（无多余参数）
+# 2. cargo build 命令用单行写，-- 后面紧跟 -C linker，避免 shell 解析错误
+# 3. 不继承任何污染的环境变量，完全干净的参数传递
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} -ldl -llog -lm -lc -lunwind"
 cargo build -p letta-ffi --target="${CARGO_TARGET}" --verbose -- -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 验证头文件
