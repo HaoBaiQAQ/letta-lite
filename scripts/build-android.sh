@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 简化环境变量（千问建议：不用手动配置NDK路径）
-export TARGET="arm64-linux-android"
+# ✅ 修正目标名称：必须是 aarch64-linux-android
+export TARGET="aarch64-linux-android"
 export ANDROID_API_LEVEL="31"
 export OPENSSL_DIR="${PWD}/openssl-install"
 export UNWIND_LIB_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64"
@@ -25,21 +25,27 @@ if [ ! -d "${OPENSSL_DIR}/lib" ]; then
     exit 1
 fi
 
-# 编译核心库（千问建议：简化命令）
+# 编译核心库（cargo-ndk 使用 ABI 名称，这是对的）
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
 cargo ndk -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --release -p letta-ffi
 
-# 生成头文件（简化命令，自动找build.rs生成的文件）
+# 生成头文件
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build --target="${TARGET}" --release -p letta-ffi
 HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/release" | head -n 1)
+if [ ! -f "${HEADER_FILE}" ]; then
+    echo -e "${RED}Error: 未生成头文件 ${HEADER_FILE}${NC}"
+    exit 1
+fi
 mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 
 # 编译JNI库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
-CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}31-clang"
+mkdir -p "${JNI_DIR}"
+
+CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
 "${CC}" \
     --sysroot="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
     -I"${JAVA_HOME}/include" \
@@ -47,8 +53,9 @@ CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}31-cl
     -I"ffi/include" \
     -shared -fPIC -o "${JNI_DIR}/libletta_jni.so" \
     "bindings/android/src/main/jni/letta_jni.c" \
-    -L"${JNI_DIR}" -lletta_ffi -L"${OPENSSL_DIR}/lib" \
-    -ldl -llog -lssl -lcrypto -O2
+    -L"${JNI_DIR}" -lletta_ffi \
+    -L"${OPENSSL_DIR}/lib" -lssl -lcrypto \
+    -ldl -llog -O2
 
 # 打包AAR
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
