@@ -32,7 +32,7 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 核心验证：静态库 libunwind.a（不再验证 .so）
+# 核心验证：静态库 libunwind.a 存在
 if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
     echo -e "${RED}Error: 未获取到有效 libunwind 静态库路径${NC}"
     echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
@@ -47,7 +47,7 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_D
     exit 1
 fi
 
-echo "Building Letta Lite for Android (${TARGET}) - 最终稳定版"
+echo "Building Letta Lite for Android (${TARGET}) - 方案2：直接传递链接参数"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
 echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
@@ -58,8 +58,8 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复：RUSTFLAGS 单行格式，无反斜杠/换行，杜绝解析歧义
-export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_LIB_DIR} -l:libunwind.a"
+# 🔧 修改1：RUSTFLAGS 只保留路径，去掉 -l:libunwind.a（避免引号问题）
+export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_LIB_DIR}"
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -67,16 +67,16 @@ export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 编译核心库（保留原作者逻辑）
+# 🔧 修改2：编译命令后直接加 -- -l:libunwind.a（绕开环境变量，无引号）
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
-cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -p letta-ffi --profile mobile --verbose
+cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -p letta-ffi --profile mobile --verbose -- -l:libunwind.a
 CORE_SO="bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（使用原作者的 --features cbindgen）
+# 生成头文件（同样添加链接参数）
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
-cargo build -p letta-ffi --target="${TARGET}" --profile mobile --features cbindgen --verbose
+cargo build -p letta-ffi --target="${TARGET}" --profile mobile --features cbindgen --verbose -- -l:libunwind.a
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
@@ -128,4 +128,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 保留栈展开功能，静态库链接成功；参数解析无歧义！${NC}"
+echo -e "\n${YELLOW}✅ 方案2成功！保留栈展开功能，无引号解析问题！${NC}"
