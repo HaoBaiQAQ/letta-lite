@@ -45,6 +45,23 @@ if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
 fi
 echo -e "${GREEN}✅ libunwind 静态库验证通过：${UNWIND_LIB_FILE}${NC}"
 
+# 🔧 新增：验证系统库是否存在（提前排错）
+SYSTEM_LIB_PATH="${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL}"
+PLATFORM_LIB_PATH="${NDK_PATH}/platforms/android-${ANDROID_API_LEVEL}/arch-arm64/usr/lib"
+if [ ! -f "${SYSTEM_LIB_PATH}/libdl.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libm.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libc.so" ]; then
+    echo -e "${RED}Error: 系统库（libdl.so/libm.so/libc.so）不存在${NC}"
+    echo -e "  - 系统库路径：${SYSTEM_LIB_PATH}"
+    ls -la "${SYSTEM_LIB_PATH}"
+    exit 1
+fi
+if [ ! -f "${PLATFORM_LIB_PATH}/liblog.so" ]; then
+    echo -e "${RED}Error: log 库（liblog.so）不存在${NC}"
+    echo -e "  - 平台库路径：${PLATFORM_LIB_PATH}"
+    ls -la "${PLATFORM_LIB_PATH}"
+    exit 1
+fi
+echo -e "${GREEN}✅ 所有系统库验证通过${NC}"
+
 # 其他必需参数验证
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_DIR}" ]; then
     echo -e "${RED}Error: 必需环境变量未传递${NC}"
@@ -72,14 +89,20 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复2：RUSTFLAGS 补充完整库搜索路径（所有库都能找到）
+# 🔧 核心修复2：RUSTFLAGS 明确引用库文件（避免模糊查找）
 export RUSTFLAGS="\
 --sysroot=${NDK_SYSROOT} \
--L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
+-L ${SYSTEM_LIB_PATH} \
 -L ${NDK_SYSROOT}/usr/lib/${TARGET} \
 -L ${UNWIND_LIB_PATH} \
 -L ${OPENSSL_LIB_DIR} \
--L ${NDK_PATH}/platforms/android-${ANDROID_API_LEVEL}/arch-arm64/usr/lib \
+-L ${PLATFORM_LIB_PATH} \
+# 明确指定库文件，100% 命中
+-l:libunwind.a \
+-l:libdl.so \
+-l:liblog.so \
+-l:libm.so \
+-l:libc.so \
 -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld \
 -C link-arg=-fuse-ld=lld \
 -C link-arg=--allow-shlib-undefined"
