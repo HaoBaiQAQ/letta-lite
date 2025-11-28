@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 根源修复版（不绕路）..."
+echo "Building Letta Lite for Android (64-bit only) - 终极手动编译版..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -25,6 +25,7 @@ check_command() {
 }
 check_command rustup
 check_command cargo
+check_command rustc
 
 # 🔧 1. 验证 NDK 配置（不变）
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
@@ -32,12 +33,11 @@ if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
     exit 1
 fi
 
-# 🔧 2. 清理可能被 cargo ndk 污染的环境变量（核心！）
-# 移除之前设置的链接器配置，避免和手动传递的 -C linker 冲突
+# 🔧 2. 清理污染的环境变量（不变）
 unset CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER 2>/dev/null
 echo -e "${GREEN}✅ 清理污染的环境变量完成${NC}"
 
-# 🔧 3. 配置交叉编译器（仅给 openssl-sys 用，不影响 linker）
+# 🔧 3. 配置交叉编译器（不变）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${CARGO_TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 if [ ! -f "${CC_aarch64_linux_android}" ]; then
@@ -69,7 +69,7 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 步骤1：编译核心库（用 cargo ndk，已成功）
+# 🔧 步骤1：编译核心库（已成功）
 echo "Building Letta FFI core library..."
 cargo ndk \
     -t arm64-v8a \
@@ -77,14 +77,34 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（根源修复！极简参数传递，不绕路）
-echo "Generating C header (根源修复参数传递)..."
-# 核心修改：
-# 1. 清理 RUSTFLAGS，只保留必要的 sysroot 和库路径（无多余参数）
-# 2. cargo build 命令用单行写，-- 后面紧跟 -C linker，避免 shell 解析错误
-# 3. 不继承任何污染的环境变量，完全干净的参数传递
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} -ldl -llog -lm -lc -lunwind"
-cargo build -p letta-ffi --target="${CARGO_TARGET}" --verbose -- -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"
+# 🔧 步骤2：手动调用 rustc 触发 build.rs 生成头文件（终极修复！）
+echo "Generating C header (手动调用 rustc，规避 cargo 参数坑)..."
+# 核心逻辑：直接用 rustc 编译 build.rs，触发头文件生成，不通过 cargo
+BUILD_SCRIPT="ffi/build.rs"
+if [ ! -f "${BUILD_SCRIPT}" ]; then
+    echo -e "${RED}Error: build.rs 未找到${NC}"
+    exit 1
+fi
+
+# 手动设置 build.rs 编译的环境变量（和 cargo 自动传递的一致）
+export OUT_DIR="${GITHUB_WORKSPACE}/target/aarch64-linux-android/mobile/build/letta-ffi-59a76ea2a7951a8d/out"
+export CARGO_MANIFEST_DIR="${GITHUB_WORKSPACE}/ffi"
+export CARGO_PKG_NAME="letta-ffi"
+export CARGO_PKG_VERSION="0.1.0"
+export CC="${CC_aarch64_linux_android}"
+
+# 手动编译 build.rs 并执行（触发 cbindgen 生成头文件）
+rustc \
+    --edition=2018 \
+    --target="${CARGO_TARGET}" \
+    --sysroot="${NDK_SYSROOT}" \
+    -L "${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}" \
+    -o "${OUT_DIR}/build-script-build" \
+    "${BUILD_SCRIPT}" \
+    --cfg procmacro2_semver_exempt \
+    --cfg rustix_use_libc \
+    -ldl -llog -lm -lc -lunwind
+"${OUT_DIR}/build-script-build"
 
 # 验证头文件
 HEADER_FILE="ffi/include/letta_lite.h"
