@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 🔧 强制仅编译64位架构，继承工作流中的环境变量
+# 🔧 强制仅编译64位架构，继承工作流环境变量
 export CARGO_TARGET=aarch64-linux-android
 export ANDROID_ABI=arm64-v8a
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 修复链接器错位+简化配置..."
+echo "Building Letta Lite for Android (64-bit only) - 彻底解决参数冲突版..."
 
-# 原作者颜色配置
+# 颜色配置
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -26,7 +26,7 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 🔧 关键1：配置交叉编译器（给 openssl-sys 用）
+# 🔧 1. 配置交叉编译器（仅1次，不重复）
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
     echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 或 NDK_SYSROOT 未传递${NC}"
     exit 1
@@ -39,14 +39,18 @@ if [ ! -f "${CC_aarch64_linux_android}" ]; then
 fi
 echo -e "${GREEN}✅ 交叉编译器配置完成：${CC_aarch64_linux_android}${NC}"
 
-# 🔧 关键2：锁定链接器为 ld.lld（修复被 cargo-ndk 覆盖的问题）
-# 核心：明确指定链接器为 NDK 的 ld.lld，避免 cargo-ndk 被当作链接器
+# 🔧 2. 仅配置1次链接器（解决参数冲突！）
+# 用 CARGO_TARGET_XXX_LINKER 环境变量，不手动传递 -C linker
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
-# 额外防护：通过 RUSTFLAGS 直接传递链接器，双重确保
-export RUSTFLAGS="-C linker=${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER} --sysroot=${NDK_SYSROOT}"
-echo -e "${GREEN}✅ 链接器锁定完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
+if [ ! -f "${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}" ]; then
+    echo -e "${RED}Error: 链接器不存在：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
+    exit 1
+fi
+# RUSTFLAGS 只保留 --sysroot，不重复加 linker
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT}"
+echo -e "${GREEN}✅ 链接器配置完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
 
-# 🔧 继承 OpenSSL 配置（不变）
+# 🔧 3. OpenSSL 配置（不变）
 if [ -z "${OPENSSL_DIR:-}" ]; then
     echo -e "${RED}Error: OPENSSL_DIR 未传递${NC}"
     exit 1
@@ -56,28 +60,20 @@ export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
 export PKG_CONFIG_ALLOW_CROSS=1
 echo -e "${GREEN}✅ OpenSSL 配置完成：${OPENSSL_DIR}${NC}"
 
-# 🔧 安装 cargo-ndk（不变）
+# 🔧 4. 安装 cargo-ndk（不变）
 if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing cargo-ndk...${NC}"
     cargo install cargo-ndk --version=3.5.4 --locked
 fi
 
-# 🔧 检查 NDK 和目标架构（不变）
+# 🔧 5. 检查 NDK 和目标架构（不变）
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME 未设置${NC}"
     exit 1
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-echo "Adding Android 64-bit target..."
-ACTIVE_TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}')
-rustup target add aarch64-linux-android --toolchain "${ACTIVE_TOOLCHAIN}"
-if ! rustup target list --toolchain "${ACTIVE_TOOLCHAIN}" | grep -q "aarch64-linux-android (installed)"; then
-    echo -e "${RED}Error: 目标架构未安装${NC}"
-    exit 1
-fi
-
-# 🔧 步骤1：编译核心库（用 cargo ndk，自动传递配置）
+# 🔧 步骤1：编译核心库（用 cargo ndk，自动传递正确配置）
 echo "Building Letta FFI core library..."
 cargo ndk \
     -t arm64-v8a \
@@ -85,7 +81,7 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（用 cargo build，避免 cargo ndk 干扰）
+# 🔧 步骤2：生成头文件（用 cargo build，不传递多余参数）
 echo "Generating C header..."
 cargo build -p letta-ffi \
     --target="${CARGO_TARGET}" \
@@ -145,7 +141,7 @@ else
 fi
 cd ../..
 
-# 🔧 验证产物（不变）
+# 🔧 验证产物
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 SO_PATH="bindings/android/src/main/jniLibs/arm64-v8a/libletta_jni.so"
 if [ -f "$AAR_PATH" ] && [ -f "$SO_PATH" ]; then
