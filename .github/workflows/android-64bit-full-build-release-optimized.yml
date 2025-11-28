@@ -1,5 +1,5 @@
 name: 最终稳定版：Letta-Lite Android 64位AAR编译
-on: [workflow_dispatch, push]
+on: [workflow_dispatch]  # 仅保留手动触发，取消 push 自动编译
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -15,6 +15,7 @@ jobs:
       CORE_PACKAGE_NAME: "letta-ffi"  # 与作者脚本一致
       AAR_MODULE_DIR: ${{ github.workspace }}/letta-lite-android
       RELEASE_DIR: ${{ github.workspace }}/release-artifacts
+
 
     steps:
       # 1. 拉取源码（含子模块）
