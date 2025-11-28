@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 🔧 核心环境变量
+# 🔧 核心环境变量（直接使用工作流传递的参数）
 export TARGET=aarch64-linux-android
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 
-echo "Building Letta Lite for Android (${TARGET}) - 终极修复版..."
+echo "Building Letta Lite for Android (${TARGET}) - 最终纯净版（不修改任何配置文件）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -16,7 +16,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查
+# 工具检查（只检查必需工具，不额外安装）
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失必要工具 $1${NC}"
@@ -29,18 +29,18 @@ check_command rustc
 check_command cbindgen
 check_command clang
 
-# 🔧 1. 验证核心配置
+# 🔧 1. 验证核心配置（确保参数传递正确）
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_DIR}" ]; then
     echo -e "${RED}Error: NDK_TOOLCHAIN_BIN/NDK_SYSROOT/OPENSSL_DIR 未传递${NC}"
     exit 1
 fi
 
-# 🔧 2. 清理干扰环境变量
+# 🔧 2. 清理干扰环境变量（只清理，不添加）
 unset CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER 2>/dev/null
 unset RUSTFLAGS 2>/dev/null
 echo -e "${GREEN}✅ 清理干扰环境变量完成${NC}"
 
-# 🔧 3. 配置交叉编译和依赖
+# 🔧 3. 配置交叉编译（仅设置环境变量，不修改文件）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
@@ -56,34 +56,13 @@ if [ ! -d "${OPENSSL_INCLUDE_DIR}" ] || [ ! -d "${OPENSSL_LIB_DIR}" ]; then
     echo -e "${RED}Error: OpenSSL 路径无效${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ 交叉编译和依赖配置完成${NC}"
+echo -e "${GREEN}✅ 交叉编译环境配置完成${NC}"
 
-# 🔧 4. 确保目标平台和依赖正确配置（修复Cargo.toml格式）
+# 🔧 4. 确保目标平台已安装（不修改任何依赖配置）
 rustup target add "${TARGET}" || true
+echo -e "${GREEN}✅ 目标平台 ${TARGET} 已就绪${NC}"
 
-# 修复ffi/Cargo.toml格式（核心修复）
-if ! grep -q '^\[package\]' ffi/Cargo.toml; then
-    echo -e "[package]\n" > ffi/Cargo.toml.tmp
-    cat ffi/Cargo.toml >> ffi/Cargo.toml.tmp
-    mv ffi/Cargo.toml.tmp ffi/Cargo.toml
-fi
-
-# 确保build = "build.rs"在[package]部分
-if ! grep -q '^build = "build.rs"' ffi/Cargo.toml; then
-    echo -e "build = \"build.rs\"" >> ffi/Cargo.toml
-fi
-
-# 确保cbindgen作为build-dependency（在[build-dependencies]部分）
-if ! grep -q "\[build-dependencies\]" ffi/Cargo.toml; then
-    echo -e "\n[build-dependencies]" >> ffi/Cargo.toml
-fi
-if ! grep -q "cbindgen" ffi/Cargo.toml; then
-    echo -e "cbindgen = \"0.26.0\"" >> ffi/Cargo.toml
-fi
-cargo update -p cbindgen@0.26.0
-echo -e "${GREEN}✅ Cargo.toml格式修复完成，依赖配置正确${NC}"
-
-# 🔧 5. 编译核心库
+# 🔧 5. 编译核心库（使用你正确的 Cargo.toml 配置）
 echo -e "\n${YELLOW}=== 编译核心库（${TARGET}）===${NC}"
 cargo ndk \
     -t arm64-v8a \
@@ -96,32 +75,34 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库 ${CORE_SO} 生成成功${NC}"
 
-# 🔧 6. 生成头文件（自动触发build.rs）
-echo -e "\n${YELLOW}=== 生成头文件（自动触发build.rs）===${NC}"
-# 通过RUSTFLAGS传递所有必要参数
+# 🔧 6. 生成头文件（Cargo 自动识别你配置的 build.rs）
+echo -e "\n${YELLOW}=== 生成头文件（自动触发 build.rs）===${NC}"
+# 仅通过 RUSTFLAGS 传递编译器参数，不修改任何文件
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR} -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld -ldl -llog -lm -lc -lunwind"
 
-# 运行cargo build触发build.rs
+# 运行 cargo build 触发 build.rs（完全依赖你的 Cargo.toml 配置）
 cargo build -p letta-ffi \
     --target="${TARGET}" \
     --verbose \
     --profile mobile
 
-# 验证头文件
+# 验证头文件（适配你 build.rs 的输出路径）
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
-    HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
+    # 自动查找 build.rs 生成的头文件（适配标准输出路径）
+    HEADER_FILE=$(find "${PWD}/target/${TARGET}/mobile/build/letta-ffi-"*"/out" -name "letta_lite.h" | head -n 1)
     if [ -z "${HEADER_FILE}" ]; then
-        echo -e "${RED}Error: 头文件生成失败${NC}"
+        echo -e "${RED}Error: 头文件生成失败（检查 build.rs 逻辑）${NC}"
         exit 1
     fi
+    # 复制到标准目录，方便后续使用
     mkdir -p ffi/include
     cp "${HEADER_FILE}" "ffi/include/"
 fi
 cp "${HEADER_FILE}" "bindings/android/src/main/jni/"
 echo -e "${GREEN}✅ 头文件 ${HEADER_FILE} 生成并复制完成${NC}"
 
-# 🔧 7. 编译JNI库
+# 🔧 7. 编译 JNI 库（关联核心库和依赖）
 echo -e "\n${YELLOW}=== 编译 JNI 库（${TARGET}）===${NC}"
 JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
 mkdir -p "${JNI_DIR}"
@@ -148,36 +129,34 @@ if [ ! -f "${JNI_DIR}/libletta_jni.so" ]; then
 fi
 echo -e "${GREEN}✅ JNI 库 ${JNI_DIR}/libletta_jni.so 生成成功${NC}"
 
-# 🔧 8. 打包 AAR
+# 🔧 8. 打包 AAR（使用你现有的 build.gradle 配置）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android
-# 确保build.gradle中配置了JNI目录
-if ! grep -q "jniLibs.srcDirs" build.gradle; then
-    echo -e "\nsourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }" >> build.gradle
-fi
 chmod +x gradlew
+# 直接运行打包命令，不修改 build.gradle（除非你自己需要）
 ./gradlew assembleRelease --no-daemon --verbose --stacktrace \
-    -Dorg.gradle.jvmargs="-Xmx2g" \
-    -Pandroid.ndkVersion="${ANDROID_NDK_VERSION}" \
-    -Pandroid.minSdkVersion="${ANDROID_API_LEVEL}"
+    -Dorg.gradle.jvmargs="-Xmx2g"
 cd ../..
 
-# 🔧 9. 收集并验证产物
+# 🔧 9. 收集并验证最终产物
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 if [ ! -f "${AAR_PATH}" ]; then
     echo -e "${RED}Error: AAR 打包失败${NC}"
     exit 1
 fi
 
+# 统一收集产物到 release 目录
 mkdir -p ./release
 cp "${CORE_SO}" ./release/
 cp "${JNI_DIR}/libletta_jni.so" ./release/
 cp "${AAR_PATH}" ./release/
 cp "${HEADER_FILE}" ./release/
 
+# 最终成功提示
 echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200（${TARGET}）${NC}"
-echo -e "${GREEN}📦 最终产物（release 目录）：${NC}"
-echo -e "  - 核心库：libletta_ffi.so"
-echo -e "  - JNI 库：libletta_jni.so"
-echo -e "  - AAR 包：android-release.aar"
-echo -e "  - 头文件：letta_lite.h"
+echo -e "${GREEN}📦 产物列表（release 目录）：${NC}"
+echo -e "  - 核心库：libletta_ffi.so（Letta-Lite 核心功能）"
+echo -e "  - JNI 库：libletta_jni.so（Android 可调用接口）"
+echo -e "  - AAR 包：android-release.aar（直接导入 Android Studio 使用）"
+echo -e "  - 头文件：letta_lite.h（C 接口说明，如需自定义 JNI 可参考）"
+echo -e "\n${YELLOW}✅ 所有配置文件（Cargo.toml、build.gradle）均未修改，完全使用你的原始配置！${NC}"
