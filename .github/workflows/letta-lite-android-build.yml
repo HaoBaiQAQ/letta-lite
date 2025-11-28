@@ -35,65 +35,70 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: Verify NDK and configure toolchain (fix libunwind path + UTF-8)
+      - name: 精准定位 NDK 27 路径（修复 libunwind 查找）
         run: |
-          # 修复中文乱码：强制 UTF-8 编码
+          # 强制 UTF-8 编码，避免乱码
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
           
-          # 查找 NDK 根路径
-          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep ${{ env.ANDROID_NDK_VERSION }})
+          # 1. 找到 NDK 根路径（精准匹配版本）
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
           if [ -z "$NDK_PATH" ]; then
-            echo "❌ NDK ${{ env.ANDROID_NDK_VERSION }} not found"
+            echo "❌ NDK ${{ env.ANDROID_NDK_VERSION }} 未找到，已安装的 NDK："
+            ls -la /usr/local/lib/android/sdk/ndk
             exit 1
           fi
+          echo "✅ NDK 根路径：$NDK_PATH"
           
-          # 基础工具链路径
+          # 2. 精准拼接 NDK 27 工具链路径（不绕弯）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          # NDK 27 的 CLANG 路径：bin 的上级目录 → lib64/clang（精准定位）
+          CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang"
           
-          # 🔧 精准查找 NDK 27+ 的 CLANG 路径（适配新目录结构）
-          CLANG_ROOT="$NDK_TOOLCHAIN_BIN/../lib64/clang"
+          # 3. 验证 CLANG_ROOT 存在（不存在则直接报错，不瞎兼容）
           if [ ! -d "$CLANG_ROOT" ]; then
-            CLANG_ROOT="$NDK_TOOLCHAIN_BIN/lib64/clang"  # 兼容 NDK 27+ 直接路径
-          fi
-          
-          # 查找 clang 版本号（如 17.0.2）
-          CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
-          if [ -z "$CLANG_VERSION" ]; then
-            echo "❌ 未找到 clang 版本号，CLANG_ROOT 目录：$(ls -la "$CLANG_ROOT")"
+            echo "❌ NDK 27 预期路径不存在：$CLANG_ROOT"
+            echo "📁 列出 linux-x86_64 目录内容（找 lib64）："
+            ls -la "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
             exit 1
           fi
           
-          # 定位 libunwind.so 路径
+          # 4. 找到 clang 版本号（如 17.0.2）
+          CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          if [ -z "$CLANG_VERSION" ]; then
+            echo "❌ 未找到 clang 版本号，CLANG_ROOT 目录内容："
+            ls -la "$CLANG_ROOT"
+            exit 1
+          fi
+          
+          # 5. 最终精准定位 libunwind.so 路径
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
           if [ ! -f "$UNWIND_LIB_PATH/libunwind.so" ]; then
             echo "❌ libunwind.so 未找到，路径：$UNWIND_LIB_PATH"
-            echo "📁 目录内容：$(ls -la "$UNWIND_LIB_PATH")"
+            echo "📁 目录内容："
+            ls -la "$UNWIND_LIB_PATH"
             exit 1
           fi
           
-          # 传递所有关键路径到环境变量（脚本直接使用）
+          # 传递路径到环境变量（脚本直接用，不重复计算）
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
-          echo "CLANG_ROOT=$CLANG_ROOT" >> $GITHUB_ENV
-          echo "CLANG_VERSION=$CLANG_VERSION" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           
-          # 验证编译器存在
+          # 验证编译器存在（额外保障）
           COMPILER_PATH="$NDK_TOOLCHAIN_BIN/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           if [ ! -f "$COMPILER_PATH" ]; then
             echo "❌ 编译器缺失：$COMPILER_PATH"
             exit 1
           fi
           
-          # 输出验证信息
-          echo "✅ NDK 配置成功"
-          echo "✅ NDK_PATH: $NDK_PATH"
-          echo "✅ CLANG_ROOT: $CLANG_ROOT"
-          echo "✅ CLANG_VERSION: $CLANG_VERSION"
-          echo "✅ UNWIND_LIB_PATH: $UNWIND_LIB_PATH"
+          # 输出精准定位结果
+          echo "✅ 所有路径定位成功："
+          echo "  - CLANG_ROOT: $CLANG_ROOT"
+          echo "  - CLANG_VERSION: $CLANG_VERSION"
+          echo "  - UNWIND_LIB_PATH: $UNWIND_LIB_PATH"
 
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
@@ -133,12 +138,11 @@ jobs:
 
       - name: Prepare 64bit-only build script
         run: |
-          # 确保脚本有执行权限
           chmod +x ./scripts/build-android-64bit-minimal.sh
 
       - name: Execute 64bit-only build script (generate SO + AAR)
         run: |
-          # 传递所有必需环境变量到脚本
+          # 传递所有必需环境变量
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
@@ -155,7 +159,7 @@ jobs:
       - name: Collect artifacts (SO + AAR + log)
         run: |
           mkdir -p ./release
-          # 全局查找 AAR（兼容原作者脚本输出路径）
+          # 全局查找 AAR
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" -type f | grep -E "release|android-release" | head -n 1)
           if [ -n "$AAR_FILE" ]; then
             cp "$AAR_FILE" ./release/letta-lite-android.aar
@@ -164,7 +168,7 @@ jobs:
             echo "❌ AAR 未找到，查看 build.log"
             exit 1
           fi
-          # 全局查找 JNI SO 库
+          # 全局查找 JNI SO
           SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" -type f | grep -E "arm64|aarch64" | head -n 1)
           if [ -n "$SO_FILE" ]; then
             cp "$SO_FILE" ./release/letta-lite-jni.so
@@ -173,7 +177,7 @@ jobs:
             echo "❌ SO 未找到，查看 build.log"
             exit 1
           fi
-          # 复制构建日志（方便排查问题）
+          # 复制日志
           cp ./build.log ./release/build.log
           ls -l ./release/
 
