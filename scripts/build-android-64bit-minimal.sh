@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 隔离 cargo-ndk 最终版..."
+echo "Building Letta Lite for Android (64-bit only) - 最终最终版（解决参数重复）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -39,7 +39,6 @@ if [ ! -d "${AARCH64_CORE_PATH}" ]; then
     echo -e "${RED}Error: aarch64 core 库路径不存在：${AARCH64_CORE_PATH}${NC}"
     echo "✅ 正在手动安装 aarch64 目标架构..."
     rustup target install "${CARGO_TARGET}"
-    # 安装后重新检查
     if [ ! -d "${AARCH64_CORE_PATH}" ]; then
         echo -e "${RED}Error: 安装后仍未找到 core 库，编译失败${NC}"
         exit 1
@@ -79,7 +78,7 @@ if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 步骤1：编译核心库（用 cargo ndk，但后续隔离它的配置）
+# 🔧 步骤1：编译核心库（用 cargo ndk，已成功）
 echo "Building Letta FFI core library..."
 cargo ndk \
     -t arm64-v8a \
@@ -87,16 +86,15 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（彻底隔离 cargo-ndk 配置，手动指定 core 库路径）
-echo "Generating C header (手动指定 core 库路径)..."
-# 关键：RUSTFLAGS 明确包含 core 库路径，不指定 linker，让 rustc 自动找
+# 🔧 步骤2：生成头文件（去掉重复的 target 参数，核心修复！）
+echo "Generating C header (解决参数重复)..."
+# 关键修改：去掉 RUSTFLAGS 里的 --target=${CARGO_TARGET}，只在 cargo build 里保留一次
 export RUSTFLAGS="\
-    --target=${CARGO_TARGET} \
     --sysroot=${NDK_SYSROOT} \
     -L ${AARCH64_CORE_PATH} \
     -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
 "
-# 简化 cargo build：只触发 build.rs，不指定 profile，避免配置冲突
+# cargo build 里保留 --target，不重复
 cargo build -p letta-ffi \
     --target="${CARGO_TARGET}" \
     --verbose
