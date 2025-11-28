@@ -1,5 +1,5 @@
 name: Letta-Lite Android (Tianji1200 64bit)
-on: [workflow_dispatch, push, pull_request]  # 恢复自动编译：push/PR 触发 + 保留手动触发
+on: [workflow_dispatch, push, pull_request]  # 自动+手动触发
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,12 +35,12 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 终极解决 libunwind（用静态库 libunwind.a）
+      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递 NDK_PATH）
         run: |
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
           
-          # 1. 找到 NDK 根路径
+          # 1. 找到 NDK 根路径（传递给脚本）
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
           [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
           
@@ -52,18 +52,20 @@ jobs:
           CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
           [ -z "$CLANG_VERSION" ] && { echo "❌ 未找到 clang 版本目录"; exit 1; }
           
-          # 4. 验证静态库 libunwind.a 存在（核心修复：用.a替代.so）
+          # 4. 验证静态库 libunwind.a 存在
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
           UNWIND_LIB_FILE="$UNWIND_LIB_PATH/libunwind.a"
           [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到，路径：$UNWIND_LIB_PATH"; ls -la "$UNWIND_LIB_PATH"; exit 1; }
           
-          # 传递路径和库文件名到环境变量
+          # 传递所有必要路径到环境变量（含 NDK_PATH）
+          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           echo "UNWIND_LIB_FILE=$UNWIND_LIB_FILE" >> $GITHUB_ENV
           
           echo "✅ 所有配置 100% 命中："
+          echo "  - NDK_PATH: $NDK_PATH"
           echo "  - UNWIND_LIB_PATH: $UNWIND_LIB_PATH"
           echo "  - 已找到静态库：$UNWIND_LIB_FILE"
 
@@ -96,8 +98,7 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      # 🔧 新增：强制设置全局链接器（解决依赖库 slug 编译）
-      - name: Force NDK linker for all Rust builds
+      - name: 强制设置全局链接器（解决依赖库 slug 编译）
         run: |
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" >> $GITHUB_ENV
           echo "✅ 全局链接器已设置为：${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
@@ -105,19 +106,22 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 保留：Cargo 专属配置（解决探测任务报错 + 补充链接参数）
-      - name: Create Cargo config (fix rustc detection error)
+      - name: Create Cargo config（完整库路径+链接参数）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [target.aarch64-linux-android]
           rustflags = [
+              "--sysroot=${env:NDK_SYSROOT}",
               "-L", "${env:NDK_SYSROOT}/usr/lib/${env:TARGET_ARCH}/${env:ANDROID_API_LEVEL}",
+              "-L", "${env:NDK_SYSROOT}/usr/lib/${env:TARGET_ARCH}",
               "-L", "${env:UNWIND_LIB_PATH}",
               "-L", "${env:OPENSSL_INSTALL_DIR}/lib",
+              "-L", "${env:NDK_PATH}/platforms/android-${env:ANDROID_API_LEVEL}/arch-arm64/usr/lib",
               "-l:libunwind.a",
               "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld",
-              "-C", "link-arg=-fuse-ld=lld"  # 额外强化链接器
+              "-C", "link-arg=-fuse-ld=lld",
+              "-C", "link-arg=--allow-shlib-undefined"
           ]
           EOF
 
@@ -125,19 +129,19 @@ jobs:
         run: |
           chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script (用静态库链接)
+      - name: Execute 64bit-only build script（传递所有环境变量）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export OPENSSL_INCLUDE_DIR=${{ env.OPENSSL_INSTALL_DIR }}/include
           export OPENSSL_LIB_DIR=${{ env.OPENSSL_INSTALL_DIR }}/lib
           export PKG_CONFIG_ALLOW_CROSS=1
+          export NDK_PATH=${{ env.NDK_PATH }}
           export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
           export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
           export UNWIND_LIB_FILE=${{ env.UNWIND_LIB_FILE }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
-          # 传递全局链接器环境变量到脚本
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld
           
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
