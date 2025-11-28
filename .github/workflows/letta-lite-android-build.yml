@@ -1,5 +1,5 @@
 name: Letta-Lite Android (Tianji1200 64bit)
-on: [workflow_dispatch]
+on: [workflow_dispatch, push, pull_request]  # 恢复自动编译：push/PR 触发 + 保留手动触发
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -98,6 +98,21 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      # 🔧 新增：创建 Cargo 专属配置（解决探测任务 "库名不能为空" 报错）
+      - name: Create Cargo config (fix rustc detection error)
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [target.aarch64-linux-android]
+          rustflags = [
+              "-L", "${env:NDK_SYSROOT}/usr/lib/${env:TARGET_ARCH}/${env:ANDROID_API_LEVEL}",
+              "-L", "${env:UNWIND_LIB_PATH}",
+              "-L", "${env:OPENSSL_INSTALL_DIR}/lib",
+              "-l:libunwind.a",
+              "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld"
+          ]
+          EOF
 
       - name: Prepare 64bit-only build script
         run: |
