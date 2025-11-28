@@ -7,10 +7,10 @@ export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 
-# 绕开-- -C bug的核心配置（开源项目通用方案）
+# 绕开-- -C bug的核心配置
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-echo "Building Letta Lite for Android (${TARGET}) - 保留栈展开版..."
+echo "Building Letta Lite for Android (${TARGET}) - NDK 27+ 适配版..."
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,41 +39,55 @@ echo -e "${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复：自动查找 libunwind.so 路径（保留栈展开）
-echo -e "\n${YELLOW}=== 查找 libunwind 库路径 ===${NC}"
-# 自动定位 NDK clang 的 lib 目录（适配所有 NDK 版本）
-CLANG_ROOT=$(dirname "${NDK_TOOLCHAIN_BIN}")/../lib64/clang
-CLANG_VERSION=$(ls -1 "${CLANG_ROOT}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
-UNWIND_LIB_PATH="${CLANG_ROOT}/${CLANG_VERSION}/lib/linux/aarch64"
+# 🔧 核心修复：适配 NDK 27+ 目录结构，多路径查找 libunwind
+echo -e "\n${YELLOW}=== 查找 libunwind 库路径（适配 NDK 27+） ===${NC}"
+TOOLCHAIN_ROOT=$(dirname "${NDK_TOOLCHAIN_BIN}")  # 得到 .../linux-x86_64
+UNWIND_LIB_PATH=""
+
+# 路径1：NDK 27+ 目录结构（直接在 toolchain root 下的 lib64/clang）
+CLANG_ROOT="${TOOLCHAIN_ROOT}/lib64/clang"
+if [ -d "${CLANG_ROOT}" ]; then
+    CLANG_VERSION=$(ls -1 "${CLANG_ROOT}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+    UNWIND_LIB_PATH="${CLANG_ROOT}/${CLANG_VERSION}/lib/linux/aarch64"
+fi
+
+# 路径2：NDK 25-26 目录结构（../lib64/clang）
+if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_PATH}/libunwind.so" ]; then
+    CLANG_ROOT="${TOOLCHAIN_ROOT}/../lib64/clang"
+    if [ -d "${CLANG_ROOT}" ]; then
+        CLANG_VERSION=$(ls -1 "${CLANG_ROOT}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        UNWIND_LIB_PATH="${CLANG_ROOT}/${CLANG_VERSION}/lib/linux/aarch64"
+    fi
+fi
 
 # 验证 libunwind.so 存在
-if [ ! -f "${UNWIND_LIB_PATH}/libunwind.so" ]; then
-    echo -e "${RED}Error: 未找到 libunwind.so（路径：${UNWIND_LIB_PATH}）${NC}"
-    echo -e "${YELLOW}提示：可能是 NDK 版本不兼容，建议使用 NDK 25+${NC}"
+if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_PATH}/libunwind.so" ]; then
+    echo -e "${RED}Error: 未找到 libunwind.so（尝试路径：${CLANG_ROOT}）${NC}"
+    echo -e "${YELLOW}解决方案：1. 确认 NDK 版本 ≥25；2. 手动设置 CLANG_ROOT 环境变量指向 clang 目录${NC}"
     exit 1
 fi
 echo -e "${GREEN}✅ 找到 libunwind 库（路径：${UNWIND_LIB_PATH}）${NC}"
 
-# 配置 RUSTFLAGS：补充系统库路径 + unwind 库路径（保留栈展开）
+# 配置 RUSTFLAGS：补充所有必需库路径
 export RUSTFLAGS="\
 -L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
 -L ${UNWIND_LIB_PATH} \
 -L ${OPENSSL_LIB_DIR}"
 
-# 配置交叉编译依赖（保留原作者逻辑）
+# 配置交叉编译依赖
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 编译核心库（保留原作者的 --profile mobile）
+# 编译核心库
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
 cargo ndk -t arm64-v8a -o bindings/android/src/main/jniLibs build -p letta-ffi --profile mobile --verbose
 CORE_SO="bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功${NC}"
 
-# 生成头文件（保留原作者的 --features cbindgen）
+# 生成头文件
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build -p letta-ffi --target="${TARGET}" --profile mobile --features cbindgen --verbose
 HEADER_FILE="ffi/include/letta_lite.h"
@@ -83,7 +97,7 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功${NC}"
 
-# 编译 JNI 库（完全保留原作者逻辑）
+# 编译 JNI 库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -96,10 +110,10 @@ JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
     "bindings/android/src/main/jni/letta_jni.c" \
     -L"${JNI_DIR}" -lletta_ffi -L"${OPENSSL_LIB_DIR}" \
     -ldl -llog -lssl -lcrypto -O2
-[ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI库编译失败${NC}"; exit 1; }
+[ ! -f "${JNI_DIR}/libunwind.so" ] && { echo -e "${RED}Error: JNI库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI库生成成功${NC}"
 
-# 打包 AAR（完全保留原作者逻辑）
+# 打包 AAR
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android
 if [ -f "gradlew" ]; then
@@ -111,10 +125,9 @@ cd ../..
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 [ ! -f "${AAR_PATH}" ] && { echo -e "${RED}Error: AAR打包失败${NC}"; exit 1; }
 
-# 收集产物（保留原作者的输出目录）
+# 收集产物
 mkdir -p ./release
 cp "${CORE_SO}" ./release/ && cp "${JNI_DIR}/libletta_jni.so" ./release/ && cp "${AAR_PATH}" ./release/ && cp "${HEADER_FILE}" ./release/
 
-echo -e "\n${GREEN}🎉 所有产物生成成功！保留栈展开功能，崩溃时可获取详细日志！${NC}"
+echo -e "\n${GREEN}🎉 所有产物生成成功！适配 NDK 27+，保留栈展开功能！${NC}"
 echo -e "${GREEN}📦 产物：release/libletta_ffi.so、libletta_jni.so、android-release.aar、letta_lite.h${NC}"
-echo -e "${YELLOW}✅ 完全保留原作者核心逻辑，仅补充 libunwind 库路径适配 CI 环境${NC}"
