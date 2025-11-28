@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 最终最终版（解决参数重复）..."
+echo "Building Letta Lite for Android (64-bit only) - 最终最终最终版（补充系统库链接）..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -86,15 +86,14 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（去掉重复的 target 参数，核心修复！）
-echo "Generating C header (解决参数重复)..."
-# 关键修改：去掉 RUSTFLAGS 里的 --target=${CARGO_TARGET}，只在 cargo build 里保留一次
+# 🔧 步骤2：生成头文件（补充系统库链接参数，核心修复！）
+echo "Generating C header (补充 Android 系统库链接)..."
 export RUSTFLAGS="\
     --sysroot=${NDK_SYSROOT} \
     -L ${AARCH64_CORE_PATH} \
     -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
+    -ldl -llog -lm -lc -lunwind \  # 新增：告诉链接器要用到这些 Android 系统库
 "
-# cargo build 里保留 --target，不重复
 cargo build -p letta-ffi \
     --target="${CARGO_TARGET}" \
     --verbose
