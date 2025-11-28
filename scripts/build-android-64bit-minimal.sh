@@ -68,12 +68,27 @@ cargo ndk \
     -o bindings/android/src/main/jniLibs \
     build -p letta-ffi --profile mobile --verbose
 
-# 🔧 修正：去掉多余的 --config 参数，用默认配置生成头文件（原作者无自定义配置）
+# 🔧 核心修复：指定 crate 目录+验证路径，确保 cbindgen 正确解析
 echo "Generating C header (aarch64 architecture)..."
+# 验证 ffi crate 根目录和源码文件是否存在（避免路径错误）
+FFI_CRATE_DIR="ffi"
+FFI_SRC_FILE="${FFI_CRATE_DIR}/src/lib.rs"
+if [ ! -d "${FFI_CRATE_DIR}" ] || [ ! -f "${FFI_SRC_FILE}" ]; then
+    echo -e "${RED}Error: FFI crate not found! Check paths:${NC}"
+    echo "  Crate dir: ${FFI_CRATE_DIR} (exists? $(test -d "${FFI_CRATE_DIR}" && echo "Yes" || echo "No"))"
+    echo "  Src file: ${FFI_SRC_FILE} (exists? $(test -f "${FFI_SRC_FILE}" && echo "Yes" || echo "No"))"
+    exit 1
+fi
+
+# 调用 cbindgen：指定 crate 目录+ crate 名称，解析更稳定
 cbindgen \
-    --lang c \  # 生成C语言头文件（JNI需要）
-    --output bindings/android/src/main/jni/letta_lite.h \  # 输出到JNI目录，直接用
-    ffi/src/lib.rs  # Rust源码入口（和原作者 build.rs 一致）
+    --crate letta-ffi \  # 明确 crate 名称（和 Cargo.toml 一致）
+    --crate-type lib \    # 明确 crate 类型为库
+    --lang c \            # 生成 C 语言头文件
+    --output bindings/android/src/main/jni/letta_lite.h \  # 输出到 JNI 目录
+    "${FFI_CRATE_DIR}"    # 传入 crate 根目录（而非单个文件）
+
+# 验证头文件是否生成成功
 if [ -f "bindings/android/src/main/jni/letta_lite.h" ]; then
     echo -e "${GREEN}✅ C header generated successfully: bindings/android/src/main/jni/letta_lite.h${NC}"
 else
