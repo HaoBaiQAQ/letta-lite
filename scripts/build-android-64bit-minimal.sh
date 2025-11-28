@@ -86,14 +86,13 @@ CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（强制依赖库使用指定链接器）
+# 生成头文件（移除命令行 -C linker 参数，依赖环境变量+配置）
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build \
     --target="${TARGET}" \
     --profile mobile \
     --verbose \
-    -p letta-ffi \
-    -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"  # 🔧 核心修复3：显式指定链接器（三重保障）
+    -p letta-ffi
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
@@ -156,4 +155,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 三重链接器保障生效！依赖库 slug 编译正常！${NC}"
+echo -e "\n${YELLOW}✅ 语法错误修复！链接器配置通过环境变量+Cargo配置生效！${NC}"
