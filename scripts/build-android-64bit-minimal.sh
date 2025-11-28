@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}  # 从工作流继承 API 级�
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}  # 从工作流继承 NDK 编译器目录
 export NDK_SYSROOT=${NDK_SYSROOT:-""}              # 从工作流继承 sysroot
 
-echo "Building Letta Lite for Android (64-bit only) - 对齐原作者+修复 OpenSSL 编译..."
+echo "Building Letta Lite for Android (64-bit only) - 最终修复版..."
 
 # 原作者颜色配置
 RED='\033[0;31m'
@@ -25,7 +25,6 @@ check_command() {
 }
 check_command rustup
 check_command cargo
-check_command cbindgen
 
 # 🔧 关键修复：给 openssl-sys 传递交叉编译器路径（核心！）
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
@@ -77,7 +76,7 @@ if ! rustup target list --toolchain "${ACTIVE_TOOLCHAIN}" | grep -q "aarch64-lin
     exit 1
 fi
 
-# 🔧 步骤1：原作者核心流程 - 用 cargo ndk 编译核心库（自动传递 NDK 信息给依赖）
+# 🔧 步骤1：原作者核心流程 - 用 cargo ndk 编译核心库（已验证成功）
 echo "Building Letta FFI core library (原作者 cargo ndk 流程)..."
 cargo ndk \
     -t arm64-v8a \
@@ -85,28 +84,28 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：原作者原版头文件生成方式（--features cbindgen，避免 cargo check 触发依赖）
-# 原作者脚本：cargo build -p letta-ffi --features cbindgen
-# 作用：触发 build.rs 生成头文件，且 cargo ndk 已传递所有环境变量，openssl-sys 不会报错
-echo "Generating C header (原作者 --features cbindgen 方式)..."
+# 🔧 步骤2：修复 feature 报错 - 直接触发 build.rs 生成头文件（原作者原版逻辑）
+# 关键：去掉 --features cbindgen（Cargo.toml 没定义这个 feature）
+# 执行 cargo build 会自动运行 build.rs，生成头文件到 ffi/include/letta_lite.h
+echo "Generating C header (原作者 build.rs 自动触发)..."
 cargo build -p letta-ffi \
-    --profile mobile \
-    --features cbindgen \
     --target="${CARGO_TARGET}" \
+    --profile mobile \
     --verbose
-# 验证头文件（原作者默认输出到 ffi/include/）
+# 验证头文件（根据 build.rs 配置，输出路径是 ffi/include/letta_lite.h）
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     echo -e "${YELLOW}Searching for generated header file...${NC}"
     HEADER_FILE=$(find "${GITHUB_WORKSPACE}" -name "letta_lite.h" | grep -v "target/debug" | head -n 1)
     if [ -z "${HEADER_FILE}" ]; then
-        echo -e "${RED}Error: 头文件未找到（原作者 build.rs 可能未正确执行）${NC}"
+        echo -e "${RED}Error: 头文件未找到（build.rs 执行失败）${NC}"
         exit 1
     fi
 fi
 # 复制头文件到 JNI 目录（原作者本地操作）
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件已复制到 JNI 目录：bindings/android/src/main/jni/letta_lite.h${NC}"
+echo -e "📌 头文件原始路径：${HEADER_FILE}"
 
 # 🔧 步骤3：原作者 JNI 编译流程（原作者本地用 NDK 编译）
 echo "Compiling JNI wrapper (原作者 NDK 编译流程)..."
