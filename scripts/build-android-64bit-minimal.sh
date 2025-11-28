@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 
-echo "Building Letta Lite for Android (64-bit only) - 彻底解决参数冲突版..."
+echo "Building Letta Lite for Android (64-bit only) - 隔离 cargo-ndk 最终版..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -26,11 +26,28 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 🔧 1. 配置交叉编译器（仅1次，不重复）
+# 🔧 1. 验证 NDK 配置（不变）
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ]; then
     echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 或 NDK_SYSROOT 未传递${NC}"
     exit 1
 fi
+
+# 🔧 2. 获取 Rust 系统根目录（关键！找到 core 库存放路径）
+RUST_SYSROOT=$(rustc --print sysroot)
+AARCH64_CORE_PATH="${RUST_SYSROOT}/lib/rustlib/${CARGO_TARGET}/lib"
+if [ ! -d "${AARCH64_CORE_PATH}" ]; then
+    echo -e "${RED}Error: aarch64 core 库路径不存在：${AARCH64_CORE_PATH}${NC}"
+    echo "✅ 正在手动安装 aarch64 目标架构..."
+    rustup target install "${CARGO_TARGET}"
+    # 安装后重新检查
+    if [ ! -d "${AARCH64_CORE_PATH}" ]; then
+        echo -e "${RED}Error: 安装后仍未找到 core 库，编译失败${NC}"
+        exit 1
+    fi
+fi
+echo -e "${GREEN}✅ core 库路径确认：${AARCH64_CORE_PATH}${NC}"
+
+# 🔧 3. 配置交叉编译器（仅给 openssl-sys 用，不影响 linker）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${CARGO_TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 if [ ! -f "${CC_aarch64_linux_android}" ]; then
@@ -39,18 +56,7 @@ if [ ! -f "${CC_aarch64_linux_android}" ]; then
 fi
 echo -e "${GREEN}✅ 交叉编译器配置完成：${CC_aarch64_linux_android}${NC}"
 
-# 🔧 2. 仅配置1次链接器（解决参数冲突！）
-# 用 CARGO_TARGET_XXX_LINKER 环境变量，不手动传递 -C linker
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
-if [ ! -f "${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}" ]; then
-    echo -e "${RED}Error: 链接器不存在：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
-    exit 1
-fi
-# RUSTFLAGS 只保留 --sysroot，不重复加 linker
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT}"
-echo -e "${GREEN}✅ 链接器配置完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
-
-# 🔧 3. OpenSSL 配置（不变）
+# 🔧 4. 配置 OpenSSL（不变）
 if [ -z "${OPENSSL_DIR:-}" ]; then
     echo -e "${RED}Error: OPENSSL_DIR 未传递${NC}"
     exit 1
@@ -60,20 +66,20 @@ export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
 export PKG_CONFIG_ALLOW_CROSS=1
 echo -e "${GREEN}✅ OpenSSL 配置完成：${OPENSSL_DIR}${NC}"
 
-# 🔧 4. 安装 cargo-ndk（不变）
+# 🔧 5. 安装 cargo-ndk（不变）
 if ! cargo ndk --version &> /dev/null; then
     echo -e "${YELLOW}Installing cargo-ndk...${NC}"
     cargo install cargo-ndk --version=3.5.4 --locked
 fi
 
-# 🔧 5. 检查 NDK 和目标架构（不变）
+# 🔧 6. 检查 NDK 环境变量（不变）
 if [ -z "${NDK_HOME:-${ANDROID_NDK_HOME:-}}" ]; then
     echo -e "${RED}Error: NDK_HOME 未设置${NC}"
     exit 1
 fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
-# 🔧 步骤1：编译核心库（用 cargo ndk，自动传递正确配置）
+# 🔧 步骤1：编译核心库（用 cargo ndk，但后续隔离它的配置）
 echo "Building Letta FFI core library..."
 cargo ndk \
     -t arm64-v8a \
@@ -81,12 +87,20 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：生成头文件（用 cargo build，不传递多余参数）
-echo "Generating C header..."
+# 🔧 步骤2：生成头文件（彻底隔离 cargo-ndk 配置，手动指定 core 库路径）
+echo "Generating C header (手动指定 core 库路径)..."
+# 关键：RUSTFLAGS 明确包含 core 库路径，不指定 linker，让 rustc 自动找
+export RUSTFLAGS="\
+    --target=${CARGO_TARGET} \
+    --sysroot=${NDK_SYSROOT} \
+    -L ${AARCH64_CORE_PATH} \
+    -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
+"
+# 简化 cargo build：只触发 build.rs，不指定 profile，避免配置冲突
 cargo build -p letta-ffi \
     --target="${CARGO_TARGET}" \
-    --profile mobile \
     --verbose
+# 验证头文件
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     echo -e "${YELLOW}Searching for header file...${NC}"
