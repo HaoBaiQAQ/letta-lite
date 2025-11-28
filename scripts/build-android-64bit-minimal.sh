@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 从 Workflow 接收环境变量（新增 NDK_PATH）
+# 从 Workflow 接收环境变量（新增 NDK_PATH）—— 保留！
 export TARGET=${TARGET:-aarch64-linux-android}
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
-export NDK_PATH=${NDK_PATH:-""}  # 新增：接收 NDK 根路径
+export NDK_PATH=${NDK_PATH:-""}  # 新增：接收 NDK 根路径——保留！
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export UNWIND_LIB_FILE=${UNWIND_LIB_FILE:-""}
 
-# 🔧 核心修复1：强制导出链接器环境变量（覆盖所有 Cargo 编译）
+# 🔧 核心修复1：强制导出链接器环境变量（覆盖所有 Cargo 编译）—— 保留！
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-# 颜色配置
+# 颜色配置——保留！
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查
+# 工具检查——保留！
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失工具 $1${NC}"
@@ -32,7 +32,7 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 核心验证：补充 NDK_PATH 验证
+# 核心验证：补充 NDK_PATH 验证——保留！
 if [ -z "${NDK_PATH}" ]; then
     echo -e "${RED}Error: 未获取到 NDK 根路径${NC}"
     exit 1
@@ -45,37 +45,32 @@ if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
 fi
 echo -e "${GREEN}✅ libunwind 静态库验证通过：${UNWIND_LIB_FILE}${NC}"
 
-# 🔧 新增：验证系统库是否存在（提前排错）
+# 🔧 修改1：验证系统库（只改 liblog.so 的查找路径，其他保留）
 SYSTEM_LIB_PATH="${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL}"
-PLATFORM_LIB_PATH="${NDK_PATH}/platforms/android-${ANDROID_API_LEVEL}/arch-arm64/usr/lib"
-if [ ! -f "${SYSTEM_LIB_PATH}/libdl.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libm.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libc.so" ]; then
-    echo -e "${RED}Error: 系统库（libdl.so/libm.so/libc.so）不存在${NC}"
+# 删掉无效的 PLATFORM_LIB_PATH（NDK 27 没有这个目录）
+# 新增：liblog.so 现在在 SYSTEM_LIB_PATH 下，一起验证
+if [ ! -f "${SYSTEM_LIB_PATH}/libdl.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libm.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/libc.so" ] || [ ! -f "${SYSTEM_LIB_PATH}/liblog.so" ]; then
+    echo -e "${RED}Error: 系统库（libdl.so/libm.so/libc.so/liblog.so）不存在${NC}"
     echo -e "  - 系统库路径：${SYSTEM_LIB_PATH}"
     ls -la "${SYSTEM_LIB_PATH}"
     exit 1
 fi
-if [ ! -f "${PLATFORM_LIB_PATH}/liblog.so" ]; then
-    echo -e "${RED}Error: log 库（liblog.so）不存在${NC}"
-    echo -e "  - 平台库路径：${PLATFORM_LIB_PATH}"
-    ls -la "${PLATFORM_LIB_PATH}"
-    exit 1
-fi
 echo -e "${GREEN}✅ 所有系统库验证通过${NC}"
 
-# 其他必需参数验证
+# 其他必需参数验证——保留！
 if [ -z "${NDK_TOOLCHAIN_BIN}" ] || [ -z "${NDK_SYSROOT}" ] || [ -z "${OPENSSL_DIR}" ]; then
     echo -e "${RED}Error: 必需环境变量未传递${NC}"
     exit 1
 fi
 
-# 显式设置 OPENSSL 路径（避免查找失败）
+# 显式设置 OPENSSL 路径（避免查找失败）——保留！
 export OPENSSL_LIB_DIR="${OPENSSL_DIR}/lib"
 export OPENSSL_INCLUDE_DIR="${OPENSSL_DIR}/include"
 echo -e "${GREEN}✅ OPENSSL 路径配置完成：${NC}"
 echo -e "  - OPENSSL_LIB_DIR: ${OPENSSL_LIB_DIR}"
 echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
-# 🔧 关键：确保 Cargo 配置生效（传递所有环境变量给 Cargo）
+# 🔧 关键：确保 Cargo 配置生效（传递所有环境变量给 Cargo）——保留！
 export CARGO_ENCODED_RUSTFLAGS=""
 echo "Building Letta Lite for Android (${TARGET}) - 完整库路径+链接器"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
@@ -84,20 +79,19 @@ echo -e "  - 链接器：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
 
-# 安装目标平台标准库
+# 安装目标平台标准库——保留！
 echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复2：RUSTFLAGS 明确引用库文件（避免模糊查找）
+# 🔧 修改2：RUSTFLAGS 删掉无效的 PLATFORM_LIB_PATH（其他保留）
 export RUSTFLAGS="\
 --sysroot=${NDK_SYSROOT} \
 -L ${SYSTEM_LIB_PATH} \
 -L ${NDK_SYSROOT}/usr/lib/${TARGET} \
 -L ${UNWIND_LIB_PATH} \
 -L ${OPENSSL_LIB_DIR} \
--L ${PLATFORM_LIB_PATH} \
-# 明确指定库文件，100% 命中
+# 明确指定库文件，100% 命中——保留！
 -l:libunwind.a \
 -l:libdl.so \
 -l:liblog.so \
@@ -107,19 +101,19 @@ export RUSTFLAGS="\
 -C link-arg=-fuse-ld=lld \
 -C link-arg=--allow-shlib-undefined"
 
-# 交叉编译依赖配置
+# 交叉编译依赖配置——保留！
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 编译核心库（Cargo 配置自动传递链接参数）
+# 编译核心库（Cargo 配置自动传递链接参数）——保留！
 echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
 cargo ndk -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（移除命令行 -C linker 参数，依赖环境变量+配置）
+# 生成头文件（移除命令行 -C linker 参数，依赖环境变量+配置）——保留！
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build \
     --target="${TARGET}" \
@@ -138,7 +132,7 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 验证静态链接
+# 验证静态链接——保留！
 echo -e "\n${YELLOW}=== 验证静态链接 ===${NC}"
 if readelf -d "${CORE_SO}" | grep -q "unwind"; then
     echo -e "${YELLOW}⚠️  警告：libunwind 可能被动态链接（正常应为静态链接）${NC}"
@@ -146,7 +140,7 @@ else
     echo -e "${GREEN}✅ 验证通过：libunwind 已静态链接，无动态依赖${NC}"
 fi
 
-# 编译 JNI 库
+# 编译 JNI 库——保留！
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -162,7 +156,7 @@ JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 [ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_DIR}/libletta_jni.so${NC}"
 
-# 打包 AAR
+# 打包 AAR——保留！
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android
 if [ -f "gradlew" ]; then
@@ -175,7 +169,7 @@ AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 [ ! -f "${AAR_PATH}" ] && { echo -e "${RED}Error: AAR 打包失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ AAR 打包成功：${AAR_PATH}${NC}"
 
-# 收集产物
+# 收集产物——保留！
 mkdir -p "${PWD}/release"
 cp "${CORE_SO}" "${PWD}/release/"
 cp "${JNI_DIR}/libletta_jni.so" "${PWD}/release/"
