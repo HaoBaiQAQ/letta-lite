@@ -8,7 +8,7 @@ export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export OPENSSL_DIR=${OPENSSL_DIR:-""}
 
-echo "Building Letta Lite for Android (${TARGET}) - 无无效参数最终版..."
+echo "Building Letta Lite for Android (${TARGET}) - 终极修复版..."
 
 # 颜色配置
 RED='\033[0;31m'
@@ -58,21 +58,32 @@ if [ ! -d "${OPENSSL_INCLUDE_DIR}" ] || [ ! -d "${OPENSSL_LIB_DIR}" ]; then
 fi
 echo -e "${GREEN}✅ 交叉编译和依赖配置完成${NC}"
 
-# 🔧 4. 确保目标平台和 cbindgen 依赖
+# 🔧 4. 确保目标平台和依赖正确配置（修复Cargo.toml格式）
 rustup target add "${TARGET}" || true
-# 确保 build.rs 被 cargo 识别（如果 ffi/Cargo.toml 没有配置 build，手动添加）
-if ! grep -q '^build = "build.rs"' ffi/Cargo.toml; then
-    echo -e "\nbuild = \"build.rs\"" >> ffi/Cargo.toml
+
+# 修复ffi/Cargo.toml格式（核心修复）
+if ! grep -q '^\[package\]' ffi/Cargo.toml; then
+    echo -e "[package]\n" > ffi/Cargo.toml.tmp
+    cat ffi/Cargo.toml >> ffi/Cargo.toml.tmp
+    mv ffi/Cargo.toml.tmp ffi/Cargo.toml
 fi
-# 确保 cbindgen 作为 build-dependency
-if ! grep -q "cbindgen" ffi/Cargo.toml; then
+
+# 确保build = "build.rs"在[package]部分
+if ! grep -q '^build = "build.rs"' ffi/Cargo.toml; then
+    echo -e "build = \"build.rs\"" >> ffi/Cargo.toml
+fi
+
+# 确保cbindgen作为build-dependency（在[build-dependencies]部分）
+if ! grep -q "\[build-dependencies\]" ffi/Cargo.toml; then
     echo -e "\n[build-dependencies]" >> ffi/Cargo.toml
-    echo 'cbindgen = "0.26.0"' >> ffi/Cargo.toml
+fi
+if ! grep -q "cbindgen" ffi/Cargo.toml; then
+    echo -e "cbindgen = \"0.26.0\"" >> ffi/Cargo.toml
 fi
 cargo update -p cbindgen@0.26.0
-echo -e "${GREEN}✅ 目标平台和依赖准备完成${NC}"
+echo -e "${GREEN}✅ Cargo.toml格式修复完成，依赖配置正确${NC}"
 
-# 🔧 5. 编译核心库（已稳定成功）
+# 🔧 5. 编译核心库
 echo -e "\n${YELLOW}=== 编译核心库（${TARGET}）===${NC}"
 cargo ndk \
     -t arm64-v8a \
@@ -85,32 +96,32 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库 ${CORE_SO} 生成成功${NC}"
 
-# 🔧 6. 生成头文件（核心简化：cargo 自动运行 build.rs）
-echo -e "\n${YELLOW}=== 生成头文件（自动触发 build.rs）===${NC}"
-# 仅通过 RUSTFLAGS 传递编译器参数，无其他无效参数
+# 🔧 6. 生成头文件（自动触发build.rs）
+echo -e "\n${YELLOW}=== 生成头文件（自动触发build.rs）===${NC}"
+# 通过RUSTFLAGS传递所有必要参数
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR} -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld -ldl -llog -lm -lc -lunwind"
 
-# 运行 cargo build 触发 build.rs（--target 确保和核心库编译目标一致）
+# 运行cargo build触发build.rs
 cargo build -p letta-ffi \
     --target="${TARGET}" \
     --verbose \
-    --profile mobile  # 和核心库用相同 profile，避免重复编译
+    --profile mobile
 
 # 验证头文件
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
-    HEADER_FILE=$(find "${PWD}/target/${TARGET}/mobile/build/letta-ffi-"*"/out" -name "letta_lite.h" | head -n 1)
+    HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
     if [ -z "${HEADER_FILE}" ]; then
         echo -e "${RED}Error: 头文件生成失败${NC}"
         exit 1
     fi
     mkdir -p ffi/include
-    cp "${HEADER_FILE}" "${HEADER_FILE}"
+    cp "${HEADER_FILE}" "ffi/include/"
 fi
 cp "${HEADER_FILE}" "bindings/android/src/main/jni/"
 echo -e "${GREEN}✅ 头文件 ${HEADER_FILE} 生成并复制完成${NC}"
 
-# 🔧 7. 编译 JNI 库（关联核心库和依赖）
+# 🔧 7. 编译JNI库
 echo -e "\n${YELLOW}=== 编译 JNI 库（${TARGET}）===${NC}"
 JNI_DIR="bindings/android/src/main/jniLibs/arm64-v8a"
 mkdir -p "${JNI_DIR}"
@@ -137,10 +148,10 @@ if [ ! -f "${JNI_DIR}/libletta_jni.so" ]; then
 fi
 echo -e "${GREEN}✅ JNI 库 ${JNI_DIR}/libletta_jni.so 生成成功${NC}"
 
-# 🔧 8. 打包 AAR（确保 JNI 被包含）
+# 🔧 8. 打包 AAR
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android
-# 配置 JNI 目录（如果未配置）
+# 确保build.gradle中配置了JNI目录
 if ! grep -q "jniLibs.srcDirs" build.gradle; then
     echo -e "\nsourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }" >> build.gradle
 fi
@@ -164,11 +175,9 @@ cp "${JNI_DIR}/libletta_jni.so" ./release/
 cp "${AAR_PATH}" ./release/
 cp "${HEADER_FILE}" ./release/
 
-# 打印最终成功信息
 echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200（${TARGET}）${NC}"
 echo -e "${GREEN}📦 最终产物（release 目录）：${NC}"
-echo -e "  - 核心库：libletta_ffi.so（Letta-Lite 核心功能）"
-echo -e "  - JNI 库：libletta_jni.so（Android 可调用接口）"
-echo -e "  - AAR 包：android-release.aar（即插即用 Android 库）"
-echo -e "  - 头文件：letta_lite.h（C 接口说明）"
-echo -e "\n${YELLOW}提示：AAR 包可直接导入 Android Studio 使用，无需额外配置依赖！${NC}"
+echo -e "  - 核心库：libletta_ffi.so"
+echo -e "  - JNI 库：libletta_jni.so"
+echo -e "  - AAR 包：android-release.aar"
+echo -e "  - 头文件：letta_lite.h"
