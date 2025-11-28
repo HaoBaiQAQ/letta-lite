@@ -10,6 +10,9 @@ export OPENSSL_DIR=${OPENSSL_DIR:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export UNWIND_LIB_FILE=${UNWIND_LIB_FILE:-""}
 
+# 🔧 核心修复1：强制导出链接器环境变量（覆盖所有 Cargo 编译）
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
+
 # 颜色配置
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,9 +55,9 @@ echo -e "  - OPENSSL_INCLUDE_DIR: ${OPENSSL_INCLUDE_DIR}"
 
 # 🔧 关键：确保 Cargo 配置生效（传递所有环境变量给 Cargo）
 export CARGO_ENCODED_RUSTFLAGS=""
-echo "Building Letta Lite for Android (${TARGET}) - 终极方案：Cargo 目标专属配置"
+echo "Building Letta Lite for Android (${TARGET}) - 强制链接器+静态库路径"
 echo -e "${GREEN}✅ 核心依赖路径验证通过：${NC}"
-echo -e "  - NDK_TOOLCHAIN_BIN: ${NDK_TOOLCHAIN_BIN}"
+echo -e "  - 链接器：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}"
 echo -e "  - UNWIND_LIB_PATH: ${UNWIND_LIB_PATH}"
 echo -e "  - OPENSSL_DIR: ${OPENSSL_DIR}"
 
@@ -63,8 +66,13 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 移除全局 RUSTFLAGS 中的链接参数，改用 .cargo/config.toml
-export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${OPENSSL_LIB_DIR}"
+# 🔧 核心修复2：RUSTFLAGS 强制注入静态库路径+链接器（覆盖依赖库）
+export RUSTFLAGS="\
+-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
+-L ${UNWIND_LIB_PATH} \
+-L ${OPENSSL_LIB_DIR} \
+-C linker=${NDK_TOOLCHAIN_BIN}/ld.lld \
+-C link-arg=-fuse-ld=lld"  # 额外强制链接器使用 lld
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -78,18 +86,18 @@ CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（Cargo 配置生效，依赖库能找到 libunwind.a）
+# 生成头文件（强制依赖库使用指定链接器）
 echo -e "\n${YELLOW}=== 生成头文件 ===${NC}"
 cargo build \
     --target="${TARGET}" \
     --profile mobile \
     --verbose \
-    -p letta-ffi
+    -p letta-ffi \
+    -C linker="${NDK_TOOLCHAIN_BIN}/ld.lld"  # 🔧 核心修复3：显式指定链接器（三重保障）
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
     if [ -z "${HEADER_FILE}" ]; then
-        # 🔧 修正：将 letta-ffi 改为 ffi（匹配实际路径）
         HEADER_FILE="${PWD}/ffi/include/letta_lite.h"
     fi
 fi
@@ -148,4 +156,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库，静态链接 libunwind）
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 终极方案生效！探测任务不报错，依赖库能找到 libunwind.a！${NC}"
+echo -e "\n${YELLOW}✅ 三重链接器保障生效！依赖库 slug 编译正常！${NC}"
