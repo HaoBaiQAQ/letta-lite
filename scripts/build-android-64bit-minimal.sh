@@ -10,7 +10,7 @@ export OPENSSL_DIR=${OPENSSL_DIR:-""}
 # 绕开-- -C bug的核心配置
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-echo "Building Letta Lite for Android (${TARGET}) - NDK 27+ 适配版..."
+echo "Building Letta Lite for Android (${TARGET}) - 保留栈展开版..."
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,8 +39,8 @@ echo -e "${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 🔧 核心修复：适配 NDK 27+ 目录结构，多路径查找 libunwind
-echo -e "\n${YELLOW}=== 查找 libunwind 库路径（适配 NDK 27+） ===${NC}"
+# 🔧 核心修复：适配所有 NDK 25+ 版本的 libunwind 路径查找
+echo -e "\n${YELLOW}=== 查找 libunwind 库路径（适配所有 NDK 25+ 版本）===${NC}"
 TOOLCHAIN_ROOT=$(dirname "${NDK_TOOLCHAIN_BIN}")  # 得到 .../linux-x86_64
 UNWIND_LIB_PATH=""
 
@@ -63,7 +63,7 @@ fi
 # 验证 libunwind.so 存在
 if [ -z "${UNWIND_LIB_PATH}" ] || [ ! -f "${UNWIND_LIB_PATH}/libunwind.so" ]; then
     echo -e "${RED}Error: 未找到 libunwind.so（尝试路径：${CLANG_ROOT}）${NC}"
-    echo -e "${YELLOW}解决方案：1. 确认 NDK 版本 ≥25；2. 手动设置 CLANG_ROOT 环境变量指向 clang 目录${NC}"
+    echo -e "${YELLOW}提示：确认 NDK 版本 ≥25，或手动设置 CLANG_ROOT 环境变量指向 clang 目录${NC}"
     exit 1
 fi
 echo -e "${GREEN}✅ 找到 libunwind 库（路径：${UNWIND_LIB_PATH}）${NC}"
@@ -129,5 +129,6 @@ AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
 mkdir -p ./release
 cp "${CORE_SO}" ./release/ && cp "${JNI_DIR}/libletta_jni.so" ./release/ && cp "${AAR_PATH}" ./release/ && cp "${HEADER_FILE}" ./release/
 
-echo -e "\n${GREEN}🎉 所有产物生成成功！适配 NDK 27+，保留栈展开功能！${NC}"
+echo -e "\n${GREEN}🎉 所有产物生成成功！保留栈展开功能，崩溃时可获取详细日志！${NC}"
 echo -e "${GREEN}📦 产物：release/libletta_ffi.so、libletta_jni.so、android-release.aar、letta_lite.h${NC}"
+echo -e "${YELLOW}✅ 完全保留原作者核心逻辑，仅修复 libunwind 路径查找问题${NC}"
