@@ -58,12 +58,8 @@ echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
 rustup target add "${TARGET}"
 echo -e "${GREEN}✅ 目标平台安装完成${NC}"
 
-# 配置 RUSTFLAGS：正确链接静态库（去掉单引号，格式正确）
-export RUSTFLAGS="\
--L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} \
--L ${UNWIND_LIB_PATH} \
--L ${OPENSSL_LIB_DIR} \
--l:libunwind.a"
+# 🔧 核心修复：RUSTFLAGS 单行格式，无反斜杠/换行，杜绝解析歧义
+export RUSTFLAGS="-L ${NDK_SYSROOT}/usr/lib/${TARGET}/${ANDROID_API_LEVEL} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_LIB_DIR} -l:libunwind.a"
 
 # 交叉编译依赖配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
@@ -132,4 +128,4 @@ echo -e "  1. libletta_ffi.so（Letta-Lite 核心库）"
 echo -e "  2. libletta_jni.so（Android JNI 接口库）"
 echo -e "  3. android-release.aar（即插即用 Android 库）"
 echo -e "  4. letta_lite.h（C 接口头文件）"
-echo -e "\n${YELLOW}✅ 保留栈展开功能，静态库链接成功；完全兼容原作者核心逻辑！${NC}"
+echo -e "\n${YELLOW}✅ 保留栈展开功能，静态库链接成功；参数解析无歧义！${NC}"
