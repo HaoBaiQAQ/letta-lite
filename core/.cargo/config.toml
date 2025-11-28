@@ -1,0 +1,9 @@
+[target.aarch64-linux-android]
+# 只给 aarch64-linux-android 目标传递链接参数，探测任务不会继承
+rustflags = [
+    "-L", "${env:NDK_SYSROOT}/usr/lib/aarch64-linux-android/${env:ANDROID_API_LEVEL}",
+    "-L", "${env:UNWIND_LIB_PATH}",
+    "-L", "${env:OPENSSL_LIB_DIR}",
+    "-l:libunwind.a",  # 仅实际编译时生效，探测任务不触发
+    "-C", "linker=${env:NDK_TOOLCHAIN_BIN}/ld.lld"
+]
