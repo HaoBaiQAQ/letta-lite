@@ -5,7 +5,7 @@ set -euo pipefail
 export CARGO_TARGET=aarch64-linux-android
 export ANDROID_ABI=arm64-v8a
 
-echo "Building Letta Lite for Android (64-bit only) - 复刻原作者思路..."
+echo "Building Letta Lite for Android (64-bit only) - 复刻原作者思路+兼容低版本Rust..."
 
 # 原作者颜色配置
 RED='\033[0;31m'
@@ -23,9 +23,10 @@ check_command() {
 check_command rustup
 check_command cargo
 
-# 🔧 显式获取当前活跃的 Rust 工具链（原作者本地默认配置）
+# 🔧 显式获取当前活跃的 Rust 工具链+版本（兼容低版本）
 ACTIVE_TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}')
-echo -e "✅ Active Rust toolchain: ${ACTIVE_TOOLCHAIN}"
+RUST_VERSION=$(rustc --version | awk '{print $2}')
+echo -e "✅ Active Rust toolchain: ${ACTIVE_TOOLCHAIN} (version: ${RUST_VERSION})"
 
 # 原作者cargo-ndk安装（原作者本地已装，CI 补装）
 if ! cargo ndk --version &> /dev/null; then
@@ -41,7 +42,7 @@ fi
 export NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 
 # 🔧 安装原作者 build.rs 依赖的 cbindgen（原作者本地已装）
-if ! cargo search cbindgen --quiet | grep -q "cbindgen"; then
+if ! command -v cbindgen &> /dev/null; then
     echo -e "${YELLOW}Installing cbindgen (原作者 build.rs 依赖)${NC}"
     cargo install cbindgen
 fi
@@ -62,28 +63,30 @@ cargo ndk \
     build -p letta-ffi --profile mobile --verbose
 echo -e "${GREEN}✅ 核心库 libletta_ffi.so 生成成功！${NC}"
 
-# 🔧 步骤2：原作者核心思路 - 用 cargo build --build-script-only 触发 build.rs 生成头文件
-# 关键参数 --build-script-only：只执行 build.rs 生成头文件，不编译依赖、不链接（绕开所有依赖坑）
-echo "Generating C header via build.rs (原作者核心逻辑)..."
-cargo build -p letta-ffi \
+# 🔧 步骤2：兼容低版本Rust - 用 cargo check 触发 build.rs 生成头文件
+# cargo check 作用：语法检查 + 执行 build.rs（不编译二进制，不链接依赖）
+echo "Generating C header via build.rs (原作者思路+兼容低版本Rust)..."
+cargo check -p letta-ffi \
     --target=aarch64-linux-android \
     --profile mobile \
-    --build-script-only  # 原作者没写这个参数，但本地环境依赖已配，CI 用这个参数绕开链接
-echo -e "${GREEN}✅ 头文件 letta_lite.h 生成成功！${NC}"
+    --verbose  # 输出详细日志，确认 build.rs 执行
+echo -e "${GREEN}✅ build.rs 执行完成，头文件生成成功！${NC}"
 
 # 🔧 验证头文件是否生成到原作者指定路径（原作者 build.rs 默认输出到 ffi/include/）
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
-    # 兼容原作者可能的输出路径（比如直接输出到 JNI 目录）
-    HEADER_FILE=$(find "ffi/" -name "letta_lite.h" | head -n 1)
+    # 兼容原作者可能的输出路径（比如 target 目录、JNI 目录）
+    echo -e "${YELLOW}Searching for generated header file...${NC}"
+    HEADER_FILE=$(find "${GITHUB_WORKSPACE}" -name "letta_lite.h" | grep -v "target/debug" | head -n 1)
     if [ -z "${HEADER_FILE}" ]; then
-        echo -e "${RED}Error: 头文件未找到（原作者 build.rs 可能修改了输出路径）${NC}"
+        echo -e "${RED}Error: 头文件未找到（请检查原作者 build.rs 中的输出路径）${NC}"
         exit 1
     fi
 fi
 # 复制头文件到 JNI 目录（原作者本地手动复制或 build.rs 自动输出）
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件已复制到 JNI 目录：bindings/android/src/main/jni/letta_lite.h${NC}"
+echo -e "📌 头文件原始路径：${HEADER_FILE}"
 
 # 🔧 步骤3：原作者 JNI 编译流程（原作者本地用 NDK 编译）
 echo "Compiling JNI wrapper (原作者 NDK 编译流程)..."
