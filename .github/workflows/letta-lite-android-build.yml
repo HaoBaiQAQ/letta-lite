@@ -87,7 +87,7 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      - name: 验证 aarch64 目标架构是否安装成功（核心！）
+      - name: 验证 aarch64 目标架构是否安装成功
         run: |
           rustup target list | grep "aarch64-linux-android"
           if rustup target list | grep -q "aarch64-linux-android (installed)"; then
@@ -99,6 +99,18 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      # ===================== 重点：显眼的 help 打印步骤 =====================
+      - name: 打印 cargo build help（找 -- 用法）
+        run: |
+          echo "========================================"
+          echo "========== cargo build --help =========="
+          echo "========================================"
+          # 直接打印所有和 "--" 相关的帮助内容，不过滤，确保你能看到
+          cargo build --help | grep -B 1 -A 5 "--"
+          echo "========================================"
+          echo "======= 上面就是 -- 的官方用法说明 ======="
+          echo "========================================"
 
       - name: Prepare 64bit-only build script
         run: |
