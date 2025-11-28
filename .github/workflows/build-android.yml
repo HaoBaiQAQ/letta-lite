@@ -2,7 +2,7 @@ name: Build Android Letta-Lite
 on:
   push:
   pull_request:
-  workflow_dispatch:  # 手动触发按钮（第四行修复：正确缩进）
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -29,7 +29,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          target: arm64-linux-android
+          target: aarch64-linux-android   # ✅ 正确目标名称
           components: rustfmt, clippy
 
       - name: Install cargo-ndk
@@ -51,11 +51,11 @@ jobs:
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
-          [target.arm64-linux-android]
+          [target.aarch64-linux-android]
           ar = "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           linker = "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
           rustflags = [
-              "-L", "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm64-linux-android/31",
+              "-L", "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/31",
               "-L", "${PWD}/openssl-install/lib",
               "-l:libunwind.a"
           ]
