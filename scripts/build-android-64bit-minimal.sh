@@ -8,7 +8,7 @@ export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}  # 从工作流继承 API 级�
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}  # 从工作流继承 NDK 编译器目录
 export NDK_SYSROOT=${NDK_SYSROOT:-""}              # 从工作流继承 sysroot
 
-echo "Building Letta Lite for Android (64-bit only) - 最终完整版（修复链接器错误）..."
+echo "Building Letta Lite for Android (64-bit only) - 最终完整版（补全系统库路径）..."
 
 # 原作者颜色配置
 RED='\033[0;31m'
@@ -39,13 +39,23 @@ if [ ! -f "${CC_aarch64_linux_android}" ]; then
 fi
 echo -e "${GREEN}✅ 交叉编译器配置完成：${CC_aarch64_linux_android}${NC}"
 
-# 🔧 关键2：修复链接器错误 - 指定 aarch64 专用链接器（核心修复！）
+# 🔧 关键2：修复链接器错误 - 指定 aarch64 专用链接器
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN_BIN}/ld.lld"
 if [ ! -f "${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}" ]; then
     echo -e "${RED}Error: 交叉链接器不存在：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
     exit 1
 fi
 echo -e "${GREEN}✅ 交叉链接器配置完成：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}${NC}"
+
+# 🔧 关键3：补全 Android 系统库路径（核心修复！给链接器画地图）
+# 1. --sysroot：指定 Android 系统库根目录；2. -L：补充具体库搜索路径（适配 API 级别和架构）
+export RUSTFLAGS="\
+    --sysroot=${NDK_SYSROOT} \
+    -L ${NDK_SYSROOT}/usr/lib \
+    -L ${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL} \
+    -L ${NDK_SYSROOT}/lib \
+"
+echo -e "${GREEN}✅ 系统库路径配置完成：${NDK_SYSROOT}/usr/lib/aarch64-linux-android/${ANDROID_API_LEVEL}${NC}"
 
 # 🔧 继承工作流的 OpenSSL 配置（已编译好的静态库）
 if [ -z "${OPENSSL_DIR:-}" ]; then
