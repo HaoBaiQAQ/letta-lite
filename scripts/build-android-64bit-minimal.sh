@@ -44,7 +44,7 @@ echo -e "  - 项目内libunwind路径：${UNWIND_LIB_COPY_PATH}"
 echo -e "  - OpenSSL 路径：${OPENSSL_LIB_DIR}"
 echo -e "  - 链接器：${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-# 最终修正：去掉反斜杠/引号，用空格分隔参数，只在编译时传递-l参数
+# 完整参数配置（与 Cargo config 保持一致，双重保障）
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${SYS_LIB_COPY_PATH} -L ${UNWIND_LIB_COPY_PATH} -L ${OPENSSL_LIB_DIR} -l libunwind.a -l libdl.so -l liblog.so -l libm.so -l libc.so -C link-arg=--allow-shlib-undefined -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 安装目标平台标准库
@@ -108,7 +108,7 @@ cp "${AAR_PATH}" "${PWD}/release/"
 cp "${HEADER_FILE}" "${PWD}/release/"
 cp "${PWD}/build.log" "${PWD}/release/"
 
-echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（最终修正版）${NC}"
+echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（最终稳定版）${NC}"
 echo -e "${GREEN}📦 产物清单（release 目录）：${NC}"
 echo -e "  1. libletta_ffi.so（核心库）"
 echo -e "  2. libletta_jni.so（JNI 库）"
