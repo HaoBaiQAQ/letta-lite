@@ -104,7 +104,7 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（适配高版本 libc + NDK 27）
+      - name: Create Cargo config（修复 Rust 参数格式 + 适配 libc）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -114,11 +114,8 @@ jobs:
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              # 🔧 关键适配：明确 Android API 级别 + 架构特性（解决高版本 libc 编译问题）
+              # 🔧 保留有效适配参数，删掉 Rust 不识别的 -m 开头参数
               "--cfg", "android_api_level=24",
-              "-march=armv8-a",
-              "-mtune=cortex-a76",
-              # 🔧 禁用 libc 非必要特性，减少兼容性冲突
               "--cfg", 'libc_no_extra_traits',
               # 标准库引用（已修复格式）
               "-l", "static=unwind",
