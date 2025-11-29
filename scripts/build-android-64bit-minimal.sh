@@ -29,7 +29,7 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 🔧 修复1：清理 Rust 环境（避免旧配置冲突）
+# 🔧 第二重保险：脚本内强制卸载+安装（确保目标架构生效）
 echo -e "\n${YELLOW}=== 清理 Rust 环境 ===${NC}"
 rustup target uninstall aarch64-linux-android 2>/dev/null || true
 rustup target install aarch64-linux-android --toolchain stable || { echo -e "${RED}Error: 安装目标平台失败${NC}"; exit 1; }
@@ -59,12 +59,10 @@ echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 [ ! -d "${OPENSSL_DIR:-}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 🔧 修复2：编译 Rust 核心库（关键：添加 NDK 编译器环境变量）
+# 🔧 核心：用 NDK Clang 编译 Rust 核心库
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
-# 强制 Rust 用 NDK 的 Clang 编译器（解决 libc 适配问题）
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
-# 执行编译（加 --verbose 方便排查，可保留）
 cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi
 CORE_SO="${JNI_LIBS_DIR}/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
