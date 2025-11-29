@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 复用 CI 提供的所有环境变量
-export TARGET=${TARGET_ARCH:-aarch64-linux-android}
+# 强制锁定目标平台（仅 arm64-v8a，适配天玑1200）
+export TARGET="aarch64-linux-android"
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_HOME=${NDK_PATH:-"/usr/local/lib/android/sdk/ndk/27.3.13750724"}
 export OPENSSL_DIR=${OPENSSL_INSTALL_DIR:-"/home/runner/work/letta-lite/openssl-install"}
@@ -10,12 +10,12 @@ export SYS_LIB_PATH=${SYS_LIB_PATH:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export RUST_STD_PATH="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${TARGET}/lib"
 
-# 自动推导核心路径
+# 自动推导核心路径（确保无中文引号）
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export PROJECT_SYS_LIB_DIR="${PWD}/dependencies/lib"
 
-# 颜色配置
+# 颜色配置（全英文引号）
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -33,7 +33,7 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 验证 CI 环境变量路径
+# 验证 CI 环境变量路径（无中文引号）
 echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
 [ -z "${NDK_TOOLCHAIN_BIN}" ] && { echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 未提供${NC}"; exit 1; }
 [ -z "${NDK_SYSROOT}" ] && { echo -e "${RED}Error: NDK_SYSROOT 未提供${NC}"; exit 1; }
@@ -42,29 +42,21 @@ echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
 [ ! -d "${OPENSSL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 库路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ 所有 CI 路径验证通过${NC}"
 
-# RUSTFLAGS 配置（无手动 linker，避免冲突）
-export RUSTFLAGS="\
---sysroot=${NDK_SYSROOT} \
--L ${RUST_STD_PATH} \
--L ${SYS_LIB_PATH} \
--L ${OPENSSL_DIR}/lib \
--L ${PROJECT_SYS_LIB_DIR}/sys \
-$( [ -n "${UNWIND_LIB_PATH}" ] && echo "-L ${UNWIND_LIB_PATH}" ) \
--C panic=abort \
--C link-arg=--allow-shlib-undefined"
+# RUSTFLAGS 配置（无中文引号、无多余字符）
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${RUST_STD_PATH} -L ${SYS_LIB_PATH} -L ${OPENSSL_DIR}/lib -L ${PROJECT_SYS_LIB_DIR}/sys $( [ -n "${UNWIND_LIB_PATH}" ] && echo "-L ${UNWIND_LIB_PATH}" ) -C panic=abort -C link-arg=--allow-shlib-undefined"
 
-# 交叉编译工具链配置
+# 交叉编译工具链配置（无中文引号）
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 构建配置汇总
-echo -e "\n${YELLOW}=== 构建配置汇总（修正参数格式） ===${NC}"
-echo -e "  目标平台：${TARGET}"
+# 构建配置汇总（无中文引号）
+echo -e "\n${YELLOW}=== 构建配置汇总（纯英文格式） ===${NC}"
+echo -e "  目标平台：${TARGET}（仅 arm64-v8a）"
 echo -e "  Android API：${ANDROID_API_LEVEL}"
 echo -e "  编译模式：panic=abort + cargo-ndk 自动 linker"
 
-# 验证目标平台标准库
+# 验证目标平台标准库（无中文引号）
 echo -e "\n${YELLOW}=== 验证目标平台标准库 ===${NC}"
 if ! rustup target list | grep -q "${TARGET} (installed)"; then
     echo -e "${YELLOW}安装目标平台 ${TARGET}...${NC}"
@@ -72,13 +64,10 @@ if ! rustup target list | grep -q "${TARGET} (installed)"; then
 fi
 echo -e "${GREEN}✅ 目标平台标准库已就绪${NC}"
 
-# 🔧 核心修复：修正 cargo-ndk 参数格式（用 --platform 指定 API 级别，避免与 -p 冲突）
-echo -e "\n${YELLOW}=== 编译核心库（修正参数格式） ===${NC}"
-cargo ndk \
-    --platform "${ANDROID_API_LEVEL}" \  # 正确参数：--platform 指定 API 级别
-    -t arm64-v8a \
-    -o "${PWD}/bindings/android/src/main/jniLibs" \
-    build --profile mobile --verbose -p letta-ffi  # -p 这里指定 crate，无冲突
+# 🔧 核心修复：1. 全英文引号 2. 锁定仅 arm64-v8a 3. 清理多余字符
+echo -e "\n${YELLOW}=== 编译核心库（纯英文命令格式） ===${NC}"
+# 命令行无中文引号、无多余空格/换行，明确指定仅 arm64-v8a
+cargo ndk --platform "${ANDROID_API_LEVEL}" -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 if [ ! -f "${CORE_SO}" ]; then
     echo -e "${RED}Error: 核心库编译失败${NC}"
@@ -86,7 +75,7 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成 C 头文件
+# 生成 C 头文件（无中文引号）
 echo -e "\n${YELLOW}=== 生成 C 头文件 ===${NC}"
 cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi
 HEADER_FILE="ffi/include/letta_lite.h"
@@ -101,31 +90,17 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库
+# 编译 JNI 库（无中文引号）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
-"${CC_aarch64_linux_android}" \
-    --sysroot="${NDK_SYSROOT}" \
-    -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
-    -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
-    -I"${NDK_SYSROOT}/usr/include" \
-    -I"ffi/include" \
-    -shared -fPIC -o "${JNI_DIR}/libletta_jni.so" \
-    "bindings/android/src/main/jni/letta_jni.c" \
-    -L"${JNI_DIR}" \
-    -L"${OPENSSL_DIR}/lib" \
-    -L "${SYS_LIB_PATH}" \
-    -lletta_ffi \
-    -lssl -lcrypto \
-    -ldl -llog -lm -lc \
-    -O2
+"${CC_aarch64_linux_android}" --sysroot="${NDK_SYSROOT}" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" -I"${NDK_SYSROOT}/usr/include" -I"ffi/include" -shared -fPIC -o "${JNI_DIR}/libletta_jni.so" "bindings/android/src/main/jni/letta_jni.c" -L"${JNI_DIR}" -L"${OPENSSL_DIR}/lib" -L "${SYS_LIB_PATH}" -lletta_ffi -lssl -lcrypto -ldl -llog -lm -lc -O2
 if [ ! -f "${JNI_DIR}/libletta_jni.so" ]; then
     echo -e "${RED}Error: JNI 库编译失败${NC}"
     exit 1
 fi
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_DIR}/libletta_jni.so${NC}"
 
-# 打包 AAR
+# 打包 AAR（无中文引号）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android || { echo -e "${RED}Error: 进入 Android 目录失败${NC}"; exit 1; }
 if [ -f "gradlew" ]; then
@@ -137,7 +112,7 @@ else
 fi
 cd ../..
 
-# 收集产物
+# 收集产物（无中文引号）
 echo -e "\n${YELLOW}=== 收集产物 ===${NC}"
 mkdir -p "${PWD}/release"
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
