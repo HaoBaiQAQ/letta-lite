@@ -29,13 +29,8 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 验证 core 库路径（再次确认）
-echo -e "\n${YELLOW}=== 最终验证 core 库 ===${NC}"
-if [ -z "${CORE_LIB_PATH:-}" ] || [ ! -f "${CORE_LIB_PATH}/libcore.rlib" ]; then
-  echo -e "${RED}❌ core 库路径无效或文件缺失！${NC}"
-  exit 1
-fi
-echo -e "${GREEN}✅ core 库路径有效：${CORE_LIB_PATH}/libcore.rlib${NC}"
+# 🔧 修复1：去掉依赖CORE_LIB_PATH的冗余验证（之前一直卡这里，改用Rust自动识别）
+# （删除原“最终验证 core 库”步骤，避免依赖未定义环境变量）
 
 # 配置 settings.gradle（不用改）
 echo -e "\n${YELLOW}=== 配置 settings.gradle ===${NC}"
@@ -53,19 +48,19 @@ echo -e "\n${YELLOW}=== 验证项目完整性 ===${NC}"
 [ ! -d "${ANDROID_PROJECT_DIR}/src/main/java" ] && { echo -e "${RED}Error: 缺失 Kotlin/Java 代码${NC}"; exit 1; }
 echo -e "${GREEN}✅ 项目文件完整${NC}"
 
-# 验证 CI 环境（不用改）
+# 🔧 修复2：统一OpenSSL路径变量（之前混用OPENSSL_DIR和OPENSSL_INSTALL_DIR）
 echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 [ -z "${NDK_TOOLCHAIN_BIN:-}" ] && { echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 未提供${NC}"; exit 1; }
 [ -z "${NDK_SYSROOT:-}" ] && { echo -e "${RED}Error: NDK_SYSROOT 未提供${NC}"; exit 1; }
-[ ! -d "${OPENSSL_DIR:-}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
+[ -z "${OPENSSL_INSTALL_DIR:-}" ] || [ ! -d "${OPENSSL_INSTALL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 🔧 终极编译 Rust 核心库：直接在命令里加 RUSTFLAGS，硬塞路径！
+# 🔧 修复3：简化RUSTFLAGS（去掉干扰Rust标准库识别的冗余参数）
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
-# 关键：强制设置 RUSTFLAGS，把 core 库路径塞进去，rustc 必须找到！
-export RUSTFLAGS="--sysroot=${RUST_SYSROOT} -L ${CORE_LIB_PATH} --sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib"
+# 只保留必要的链接路径，不干扰core库自动识别
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib"
 cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi
 CORE_SO="${JNI_LIBS_DIR}/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
@@ -78,18 +73,19 @@ HEADER_FILE="${HEADER_DIR}/letta_lite.h"
 [ ! -f "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（不用改）
+# 🔧 修复4：简化JNI编译器路径（不用依赖CC_aarch64_linux_android变量）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
-"${CC_aarch64_linux_android:-${NDK_TOOLCHAIN_BIN}/${TARGET:-aarch64-linux-android}${ANDROID_API_LEVEL:-24}-clang}" \
+"${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL:-24}-clang" \
     --sysroot="${NDK_SYSROOT}" \
     -I"${JAVA_HOME:-/usr/lib/jvm/default}/include" \
     -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
     -I"${NDK_SYSROOT}/usr/include" \
     -I"${HEADER_DIR}" \
+    -I"${OPENSSL_INSTALL_DIR}/include" \  # 补充OpenSSL头文件路径
     -shared -fPIC -o "${JNI_LIBS_DIR}/libletta_jni.so" \
     "${HEADER_DIR}/letta_jni.c" \
     -L"${JNI_LIBS_DIR}" \
-    -L"${OPENSSL_DIR}/lib" \
+    -L"${OPENSSL_INSTALL_DIR}/lib" \  # 统一用OPENSSL_INSTALL_DIR
     -L "${UNWIND_LIB_PATH:-}" \
     -lletta_ffi \
     -lssl -lcrypto \
@@ -98,7 +94,7 @@ JNI_SO="${JNI_LIBS_DIR}/libletta_jni.so"
 [ ! -f "${JNI_SO}" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_SO}${NC}"
 
-# 打包 AAR（不用改）
+# 打包 AAR（不用改，保留你的兜底逻辑）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd "${ANDROID_PROJECT_DIR}" || exit 1
 
@@ -110,7 +106,7 @@ gradle wrapper --gradle-version 7.5 --distribution-type all || {
         -Pandroid.compileSdkVersion=34 \
         -Pandroid.minSdkVersion=21 \
         -Pandroid.targetSdkVersion=34 \
-        -Pandroid.ndkPath="${NDK_PATH:-/usr/local/lib/android/sdk/ndk/27.3.13750724}"
+        -Pandroid.ndkPath="${NDK_PATH:-}"  # 去掉硬编码，优先用环境变量
 }
 chmod +x gradlew 2>/dev/null
 
@@ -121,14 +117,14 @@ if [ -f "gradlew" ]; then
         -Pandroid.compileSdkVersion=34 \
         -Pandroid.minSdkVersion=21 \
         -Pandroid.targetSdkVersion=34 \
-        -Pandroid.ndkPath="${NDK_PATH:-/usr/local/lib/android/sdk/ndk/27.3.13750724}" || {
+        -Pandroid.ndkPath="${NDK_PATH:-}" || {
             echo -e "${YELLOW}gradlew 打包失败，用系统 Gradle 兜底...${NC}"
             gradle assembleRelease --no-daemon \
                 -Dorg.gradle.jvmargs="-Xmx2g" \
                 -Pandroid.compileSdkVersion=34 \
                 -Pandroid.minSdkVersion=21 \
                 -Pandroid.targetSdkVersion=34 \
-                -Pandroid.ndkPath="${NDK_PATH:-/usr/local/lib/android/sdk/ndk/27.3.13750724}"
+                -Pandroid.ndkPath="${NDK_PATH:-}"
         }
 else
     gradle assembleRelease --no-daemon \
@@ -136,7 +132,7 @@ else
         -Pandroid.compileSdkVersion=34 \
         -Pandroid.minSdkVersion=21 \
         -Pandroid.targetSdkVersion=34 \
-        -Pandroid.ndkPath="${NDK_PATH:-/usr/local/lib/android/sdk/ndk/27.3.13750724}"
+        -Pandroid.ndkPath="${NDK_PATH:-}"
 fi
 cd ../..
 
