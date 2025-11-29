@@ -119,10 +119,11 @@ cp "$CORE_SO" "${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/"
 [ ! -f "$CORE_SO" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：$CORE_SO${NC}"
 
-# 生成头文件（修复 cbindgen 命令，去掉 --target）
-echo -e "\n${YELLOW}=== 生成头文件（强制调用 cbindgen） ===${NC}"
+# 🔧 修复：去掉 --config 参数，用 cbindgen 默认配置生成头文件
+echo -e "\n${YELLOW}=== 生成头文件（cbindgen 默认配置） ===${NC}"
 mkdir -p ffi/include bindings/android/src/main/jni
-cbindgen --config ffi/cbindgen.toml --crate letta-ffi --output ffi/include/letta_lite.h
+# 直接生成，不依赖配置文件（默认配置足够 JNI 使用）
+cbindgen --crate letta-ffi --output ffi/include/letta_lite.h
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "$HEADER_FILE" ]; then
     echo -e "${YELLOW}⚠️ cbindgen 生成失败，搜索自动生成的头文件...${NC}"
