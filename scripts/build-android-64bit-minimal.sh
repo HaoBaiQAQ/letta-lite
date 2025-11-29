@@ -16,7 +16,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 🔧 先检测 rustup 路径，确保能找到命令
+# 先检测 rustup 路径，确保能找到命令
 find_rustup() {
     echo -e "\n${YELLOW}=== 检测 rustup 路径 ===${NC}"
     if command -v rustup &> /dev/null; then
@@ -54,31 +54,29 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 🔧 核心修复：不用 sudo，直接安装目标平台标准库（用户级权限足够）
+# 🔧 核心修复：去掉 --verbose 参数，先检测是否已安装，已安装直接跳过
 install_target_std() {
-    echo -e "\n${YELLOW}=== 安装目标平台标准库（aarch64-linux-android） ===${NC}"
-    # 直接用 rustup，不加 sudo，指定工具链确保生效
-    rustup target add --toolchain stable --verbose "${TARGET}" || {
+    echo -e "\n${YELLOW}=== 检查目标平台标准库（aarch64-linux-android） ===${NC}"
+    # 先检测是否已安装，已安装直接跳过
+    if rustup target list | grep -q "${TARGET} (installed)"; then
+        echo -e "${GREEN}✅ 目标平台标准库已安装，无需重复操作${NC}"
+        return 0
+    fi
+    # 未安装时才执行安装（不加 --verbose，避免参数错误）
+    echo -e "${YELLOW}⚠️ 目标平台未安装，开始安装...${NC}"
+    rustup target add --toolchain stable "${TARGET}" || {
         echo -e "${YELLOW}⚠️ 第一次安装失败，重试...${NC}"
-        rustup target add --toolchain stable --verbose "${TARGET}" || {
+        rustup target add --toolchain stable "${TARGET}" || {
             echo -e "${RED}Error: 目标平台标准库安装失败${NC}"
-            # 打印详细日志排查
             rustup show
             rustup target list
             exit 1
         }
     }
-    # 严格验证安装结果
-    if rustup target list | grep -q "${TARGET} (installed)"; then
-        echo -e "${GREEN}✅ 目标平台标准库安装成功${NC}"
-    else
-        echo -e "${RED}Error: 目标平台显示未安装${NC}"
-        rustup target list
-        exit 1
-    fi
+    echo -e "${GREEN}✅ 目标平台标准库安装成功${NC}"
 }
 
-# 先安装标准库，再验证其他路径
+# 先检查/安装标准库，再验证其他路径
 install_target_std
 
 # 验证所有路径是否存在
