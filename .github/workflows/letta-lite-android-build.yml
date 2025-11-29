@@ -50,7 +50,6 @@ jobs:
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
-          echo "CLANG_VERSION=$CLANG_VERSION" >> $GITHUB_ENV  # 传递 clang 版本号
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
       # 🔧 核心修复：1. 修正验证逻辑；2. 参考你旧工作流，去掉多余的 --cross-compile-prefix
@@ -104,22 +103,21 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 终极终极修复：删除 Cargo config，改用环境变量全局注入 RUSTFLAGS（优先级最高，100% 传递）
-      - name: 全局注入 RUSTFLAGS（确保所有库都能拿到路径）
+      # 🔧 终极终极终极修复：目标架构专属 Rustflags，强制传递给所有依赖（含 slug）
+      - name: 注入目标架构专属 Rustflags（100% 传递，必生效）
         run: |
-          echo "RUSTFLAGS= \
-            --sysroot=${{ env.NDK_SYSROOT }} \
-            -L ${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24 \
-            -L ${{ env.UNWIND_LIB_PATH }} \
-            -L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
-            -l:libunwind.a \
-            -l:libdl.so \
-            -l:liblog.so \
-            -l:libm.so \
-            -l:libc.so \
-            -C link-arg=--allow-shlib-undefined \
-            -C linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld \
-          " >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=\
+          --sysroot=${{ env.NDK_SYSROOT }} \
+          -L ${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24 \
+          -L ${{ env.UNWIND_LIB_PATH }} \
+          -L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
+          -l:libunwind.a \
+          -l:libdl.so \
+          -l:liblog.so \
+          -l:libm.so \
+          -l:libc.so \
+          -C link-arg=--allow-shlib-undefined \
+          -C linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" >> $GITHUB_ENV
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
