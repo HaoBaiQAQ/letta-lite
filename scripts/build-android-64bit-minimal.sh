@@ -9,7 +9,7 @@ export OPENSSL_INSTALL_DIR=${OPENSSL_DIR:-""}
 export SYS_LIB_COPY_PATH="/home/runner/work/letta-lite/letta-lite/dependencies/lib/sys"
 export UNWIND_LIB_COPY_PATH="/home/runner/work/letta-lite/letta-lite/dependencies/lib/unwind"
 export NDK_TOOLCHAIN_BIN="/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin"
-# 🔧 关键添加：Rust 目标平台标准库路径（GitHub Actions 固定路径）
+# Rust 目标平台标准库路径（GitHub Actions 固定路径）
 export RUST_STD_PATH="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/aarch64-linux-android/lib"
 
 # 颜色配置
@@ -97,20 +97,8 @@ echo -e "  - Rust 标准库路径：$RUST_STD_PATH"
 echo -e "  - 系统库路径：$SYS_LIB_COPY_PATH"
 echo -e "  - NDK SYSROOT：$NDK_SYSROOT"
 
-# 🔧 终极修复：添加 Rust 标准库路径到 RUSTFLAGS，强制编译器找到 core 库
-export RUSTFLAGS="\
---sysroot=$NDK_SYSROOT \
--L $RUST_STD_PATH \          # 手动指定目标平台 Rust 标准库（含 core）
--L $SYS_LIB_COPY_PATH \
--L $UNWIND_LIB_COPY_PATH \
--L $OPENSSL_LIB_DIR \
--l libunwind.a \
--l libdl.so \
--l liblog.so \
--l libm.so \
--l libc.so \
--C link-arg=--allow-shlib-undefined \
--C linker=$NDK_TOOLCHAIN_BIN/ld.lld"
+# 🔧 修复语法：去掉所有注释、反斜杠，纯参数空格分隔
+export RUSTFLAGS="--sysroot=$NDK_SYSROOT -L $RUST_STD_PATH -L $SYS_LIB_COPY_PATH -L $UNWIND_LIB_COPY_PATH -L $OPENSSL_LIB_DIR -l libunwind.a -l libdl.so -l liblog.so -l libm.so -l libc.so -C link-arg=--allow-shlib-undefined -C linker=$NDK_TOOLCHAIN_BIN/ld.lld"
 
 # 重新拉取依赖（关联标准库路径）
 echo -e "\n${YELLOW}=== 重新拉取所有项目依赖 ===${NC}"
