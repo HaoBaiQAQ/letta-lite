@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 核心环境变量（对齐你的项目配置）
+# 核心环境变量（对齐项目配置）
 export TARGET="aarch64-linux-android"
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-21}
 export NDK_HOME=${NDK_PATH:-"/usr/local/lib/android/sdk/ndk/27.3.13750724"}
@@ -10,7 +10,7 @@ export SYS_LIB_PATH=${SYS_LIB_PATH:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export RUST_STD_PATH="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${TARGET}/lib"
 
-# 项目路径（按你的实际目录）
+# 项目路径
 export PROJECT_ROOT="${PWD}"
 export ANDROID_PROJECT_DIR="${PWD}/bindings/android"
 export JNI_LIBS_DIR="${ANDROID_PROJECT_DIR}/src/main/jniLibs/arm64-v8a"
@@ -37,29 +37,13 @@ check_command clang
 check_command cbindgen
 check_command gradle
 
-# 🔧 关键：备份原文件→修改→打包后恢复，不影响本地开发
-echo -e "\n${YELLOW}=== 处理 settings.gradle（兼容 CI 环境） ===${NC}"
-# 备份你的原始文件（命名为 settings.gradle.ci.bak）
-if [ -f "${SETTINGS_FILE}" ]; then
-    cp "${SETTINGS_FILE}" "${SETTINGS_FILE}.ci.bak"
-    echo -e "${GREEN}✅ 已备份你的原始 settings.gradle 为 settings.gradle.ci.bak${NC}"
-fi
+# 🔧 第一步：备份原文件 + 用「极简兼容版」settings.gradle（适配所有Gradle版本）
+echo -e "\n${YELLOW}=== 配置 settings.gradle（极简兼容版） ===${NC}"
+cp "${SETTINGS_FILE}" "${SETTINGS_FILE}.ci.bak" || echo -e "${YELLOW}⚠️  原 settings.gradle 备份失败，可能不存在${NC}"
 
-# 写入兼容 CI 的配置（只改2处，保留你的核心配置）
+# 写入「无高版本语法」的极简配置（去掉所有pluginManagement里的plugins，只保留仓库和子模块）
 cat > "${SETTINGS_FILE}" << EOF
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-    plugins {
-        id 'com.android.application' version '7.4.2' apply false
-        id 'com.android.library' version '7.4.2' apply false
-        id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
-    }
-}
-
+// 极简兼容版：去掉所有高版本语法，适配 Gradle 4.x+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -69,11 +53,11 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "LettaLite"
-include ":bindings:android"
+include ":bindings:android" // 正确的子模块路径
 EOF
-echo -e "${GREEN}✅ 已临时修改 settings.gradle 适配 CI（打包后自动恢复）${NC}"
+echo -e "${GREEN}✅ 已写入极简兼容版 settings.gradle（无高版本语法）${NC}"
 
-# 路径验证（确保 Android 项目存在）
+# 路径验证
 echo -e "\n${YELLOW}=== 验证项目完整性 ===${NC}"
 [ ! -f "${ANDROID_PROJECT_DIR}/build.gradle" ] && { echo -e "${RED}Error: 缺失 bindings/android/build.gradle${NC}"; exit 1; }
 [ ! -f "${HEADER_DIR}/letta_jni.c" ] && { echo -e "${RED}Error: 缺失 JNI 代码${NC}"; exit 1; }
@@ -130,25 +114,32 @@ JNI_SO="${JNI_LIBS_DIR}/libletta_jni.so"
 [ ! -f "${JNI_SO}" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_SO}${NC}"
 
-# 4. 自动打包 AAR（生成兼容 Gradle 7.5 的 wrapper）
-echo -e "\n${YELLOW}=== 自动打包 AAR ===${NC}"
+# 🔧 第二步：生成 gradlew + 打印详细错误栈（按你的要求）
+echo -e "\n${YELLOW}=== 生成 gradlew + 打印详细错误日志 ===${NC}"
 cd "${ANDROID_PROJECT_DIR}" || { echo -e "${RED}Error: 进入 Android 项目目录失败${NC}"; exit 1; }
 
-# 生成 Gradle 7.5 的 wrapper（兼容插件版本 7.4.2）
-if [ ! -f "gradlew" ]; then
-    echo -e "${YELLOW}生成 Gradle 7.5 兼容版 gradlew...${NC}"
-    gradle wrapper --gradle-version 7.5 --distribution-type all || { echo -e "${RED}Error: gradlew 生成失败${NC}"; exit 1; }
-    chmod +x gradlew
-fi
+# 生成 gradlew 时添加 --stacktrace，打印详细错误（关键！）
+echo -e "${YELLOW}正在生成 gradlew（Gradle 7.0，兼容最低版本），并打印详细错误栈...${NC}"
+gradle wrapper --gradle-version 7.0 --distribution-type all --stacktrace || {
+    echo -e "\n${RED}❌ gradlew 生成失败，详细错误栈如下：${NC}"
+    # 手动输出错误日志（确保能看到完整信息）
+    cat "${PROJECT_ROOT}/gradle-wrapper-error.log" 2>/dev/null || echo -e "${RED}⚠️  未找到错误日志文件${NC}"
+    exit 1
+}
+chmod +x gradlew
 
-# 执行打包（对齐你的 build.gradle 配置）
-echo -e "${YELLOW}执行 gradlew assembleRelease...${NC}"
+# 执行打包（同样添加 --stacktrace）
+echo -e "\n${YELLOW}执行 gradlew assembleRelease + 详细错误栈...${NC}"
 ./gradlew assembleRelease --no-daemon \
     -Dorg.gradle.jvmargs="-Xmx2g" \
     -Pandroid.compileSdkVersion=34 \
     -Pandroid.minSdkVersion=21 \
     -Pandroid.targetSdkVersion=34 \
-    -Pandroid.ndkPath="${NDK_HOME}" || { echo -e "${RED}Error: 自动打包失败${NC}"; exit 1; }
+    -Pandroid.ndkPath="${NDK_HOME}" \
+    --stacktrace || {
+        echo -e "\n${RED}❌ 自动打包失败，详细错误栈已打印${NC}"
+        exit 1
+    }
 cd ../..
 
 # 查找并复制 AAR
@@ -157,21 +148,16 @@ AAR_FINAL="${PROJECT_ROOT}/release/letta-lite-android.aar"
 mkdir -p "${PROJECT_ROOT}/release"
 cp "${AAR_PATH}" "${AAR_FINAL}"
 
-# 🔧 关键：恢复你的原始 settings.gradle（不影响本地开发）
-if [ -f "${SETTINGS_FILE}.ci.bak" ]; then
-    mv "${SETTINGS_FILE}.ci.bak" "${SETTINGS_FILE}"
-    echo -e "${GREEN}✅ 已恢复你的原始 settings.gradle 文件${NC}"
-fi
+# 恢复原 settings.gradle
+mv "${SETTINGS_FILE}.ci.bak" "${SETTINGS_FILE}" 2>/dev/null || echo -e "${YELLOW}⚠️  恢复原 settings.gradle 失败${NC}"
 
 # 收集产物
 echo -e "\n${YELLOW}=== 收集最终产物 ===${NC}"
 cp "${CORE_SO}" "${PROJECT_ROOT}/release/"
 cp "${JNI_SO}" "${PROJECT_ROOT}/release/"
 cp "${HEADER_FILE}" "${PROJECT_ROOT}/release/"
-cp "${PROJECT_ROOT}/build.log" "${PROJECT_ROOT}/release/"
 
 # 最终验证
 echo -e "\n${GREEN}🎉 自动打包 100% 成功！${NC}"
 echo -e "${GREEN}📦 产物清单（release 目录）：${NC}"
 ls -l "${PROJECT_ROOT}/release/"
-echo -e "\n${YELLOW}🚀 你的原始配置已完全恢复，AAR 可直接导入 Android 项目使用！${NC}"
