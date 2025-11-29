@@ -1,3 +1,4 @@
+# ffi/Cargo.toml 完整修改后（只改 dependencies 里的 libc 一行）
 [package]
 name = "letta-ffi"
 version.workspace = true
@@ -17,7 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 lazy_static = "1.5"
-libc = "0.2"
+libc = { workspace = true }  # 🔧 只改这一行！引用工作区锁定的 0.2.150
 
 [build-dependencies]
 cbindgen = "0.26"
