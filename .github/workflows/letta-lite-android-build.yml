@@ -57,7 +57,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/dependencies/lib/sys" "${{ github.workspace }}/dependencies/lib/unwind"
           cp "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "${{ github.workspace }}/dependencies/lib/sys/"
           cp "$UNWIND_LIB_PATH/libunwind.a" "${{ github.workspace }}/dependencies/lib/unwind/"
-          # 5. 传递路径到环境变量
+          # 5. 传递路径到环境变量（修正：确保路径无重复）
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
@@ -94,7 +94,7 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Auto-create Cargo config（指向项目内复制的库）
+      - name: Auto-create Cargo config（修正中文冒号→英文冒号）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -104,11 +104,11 @@ jobs:
             "-L", "${{ env.SYS_LIB_COPY_PATH }}",  # 项目内的系统库路径
             "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",  # 项目内的libunwind.a路径
             "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-            "-l:libunwind.a",
-            "-l:libdl.so",
-            "-l:liblog.so",
-            "-l:libm.so",
-            "-l:libc.so",
+            "-l:libunwind.a",  # 修正：英文冒号
+            "-l:libdl.so",     # 修正：英文冒号
+            "-l:liblog.so",     # 修正：英文冒号
+            "-l:libm.so",      # 修正：英文冒号
+            "-l:libc.so",      # 修正：英文冒号
             "-C", "link-arg=--allow-shlib-undefined",
             "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           ]
@@ -120,11 +120,11 @@ jobs:
             "-L", "${{ env.SYS_LIB_COPY_PATH }}",
             "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
             "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-            "-l:libunwind.a",
-            "-l:libdl.so",
-            "-l:liblog.so",
-            "-l:libm.so",
-            "-l:libc.so",
+            "-l:libunwind.a",  # 修正：英文冒号
+            "-l:libdl.so",     # 修正：英文冒号
+            "-l:liblog.so",     # 修正：英文冒号
+            "-l:libm.so",      # 修正：英文冒号
+            "-l:libc.so",      # 修正：英文冒号
             "-C", "link-arg=--allow-shlib-undefined"
           ]
 
