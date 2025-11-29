@@ -42,22 +42,19 @@ jobs:
           # 1. 找到 NDK 真实路径
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
           [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
-          # 2. 定义关键路径（系统库所在位置）
+          # 2. 定义关键路径（简化，避免参数过长）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          # 系统库路径（libdl.so/liblog.so等在这里）
           SYS_LIB_PATH="$NDK_SYSROOT/usr/lib/aarch64-linux-android/24"
-          # libunwind.a 路径（clang 自带的静态库）
           UNWIND_LIB_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64"
-          # 3. 验证系统库是否存在
+          # 3. 验证并复制系统库
           for lib in "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "$UNWIND_LIB_PATH/libunwind.a"; do
             [ ! -f "$lib" ] && { echo "❌ 缺失系统库：$lib"; exit 1; }
           done
-          # 4. 在项目内创建目录，复制系统库（让依赖库直接找到）
           mkdir -p "${{ github.workspace }}/dependencies/lib/sys" "${{ github.workspace }}/dependencies/lib/unwind"
-          cp "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "${{ github.workspace }}/dependencies/lib/sys/"
+          cp "$SYS_LIB_PATH/"*.so "${{ github.workspace }}/dependencies/lib/sys/"
           cp "$UNWIND_LIB_PATH/libunwind.a" "${{ github.workspace }}/dependencies/lib/unwind/"
-          # 5. 传递路径到环境变量
+          # 4. 传递路径到环境变量（关键：用环境变量直接传递，避免拼接）
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
@@ -85,41 +82,39 @@ jobs:
           make install_sw
           echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
-      - name: Configure Rust environment
+      # 🔧 关键修复：先安装目标平台标准库，再配置 Cargo
+      - name: Configure Rust environment + 安装目标平台标准库
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
+          components: rust-std  # 强制安装目标平台标准库
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Auto-create Cargo config（完整参数，适配所有依赖）
+      # 🔧 精简参数：避免 --sysroot 被截断
+      - name: Auto-create Cargo config（精简参数，确保生效）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [build]
+          # 只保留必需参数，避免过长截断
           rustflags = [
-            "--sysroot=${{ env.NDK_SYSROOT }}",
-            "-L", "${{ env.SYS_LIB_COPY_PATH }}",
-            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
-            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-            "-l", "libunwind.a",
-            "-l", "libdl.so",
-            "-l", "liblog.so",
-            "-l", "libm.so",
-            "-l", "libc.so",
-            "-C", "link-arg=--allow-shlib-undefined",
-            "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+            "--sysroot=\${NDK_SYSROOT}",  # 用环境变量，避免硬编码过长
+            "-L", "\${SYS_LIB_COPY_PATH}",
+            "-L", "\${UNWIND_LIB_COPY_PATH}",
+            "-L", "\${OPENSSL_INSTALL_DIR}/lib",
+            "-C", "linker=\${NDK_TOOLCHAIN_BIN}/ld.lld"
           ]
 
           [target.aarch64-linux-android]
-          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          linker = "\${NDK_TOOLCHAIN_BIN}/ld.lld"
           rustflags = [
-            "--sysroot=${{ env.NDK_SYSROOT }}",
-            "-L", "${{ env.SYS_LIB_COPY_PATH }}",
-            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
-            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "--sysroot=\${NDK_SYSROOT}",
+            "-L", "\${SYS_LIB_COPY_PATH}",
+            "-L", "\${UNWIND_LIB_COPY_PATH}",
+            "-L", "\${OPENSSL_INSTALL_DIR}/lib",
             "-l", "libunwind.a",
             "-l", "libdl.so",
             "-l", "liblog.so",
@@ -137,14 +132,14 @@ jobs:
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译，完整参数）
+      - name: Execute 64bit-only build script（精简 RUSTFLAGS）
         run: |
-          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export NDK_PATH=${{ env.NDK_PATH }}
-          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
+          # 导出环境变量，供 Cargo config 使用
           export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
           export SYS_LIB_COPY_PATH=${{ env.SYS_LIB_COPY_PATH }}
           export UNWIND_LIB_COPY_PATH=${{ env.UNWIND_LIB_COPY_PATH }}
+          export OPENSSL_INSTALL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
