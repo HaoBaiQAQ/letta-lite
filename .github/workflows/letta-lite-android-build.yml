@@ -103,13 +103,12 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 关键修复：统一 Cargo config（只这里指定 linker+路径，无重复）
-      - name: Create Cargo config（统一管理 linker+路径，解决冲突）
+      # 🔧 最终修复：删掉重复的 linker 配置，只传递路径和库引用
+      - name: Create Cargo config（只传路径，不重复指定 linker）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [target.aarch64-linux-android]
-          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"  # 唯一指定 linker，不重复
           rustflags = [
               "--sysroot=${{ env.NDK_SYSROOT }}",
               # 系统库路径（100% 正确，直接写死）
