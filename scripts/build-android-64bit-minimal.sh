@@ -29,12 +29,13 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 🔧 第二重保险：脚本内强制卸载+安装（确保目标架构生效）
-echo -e "\n${YELLOW}=== 清理 Rust 环境 ===${NC}"
-rustup target uninstall aarch64-linux-android 2>/dev/null || true
-rustup target install aarch64-linux-android --toolchain stable || { echo -e "${RED}Error: 安装目标平台失败${NC}"; exit 1; }
-cargo fetch  # 只拉取锁定版本，不更新依赖
-echo -e "${GREEN}✅ Rust 环境清理完成${NC}"
+# 验证 core 库路径（再次确认）
+echo -e "\n${YELLOW}=== 最终验证 core 库 ===${NC}"
+if [ -z "${CORE_LIB_PATH:-}" ] || [ ! -f "${CORE_LIB_PATH}/libcore.rlib" ]; then
+  echo -e "${RED}❌ core 库路径无效或文件缺失！${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✅ core 库路径有效：${CORE_LIB_PATH}/libcore.rlib${NC}"
 
 # 配置 settings.gradle（不用改）
 echo -e "\n${YELLOW}=== 配置 settings.gradle ===${NC}"
@@ -59,10 +60,12 @@ echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 [ ! -d "${OPENSSL_DIR:-}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 🔧 核心：用 NDK Clang 编译 Rust 核心库
+# 🔧 终极编译 Rust 核心库：直接在命令里加 RUSTFLAGS，硬塞路径！
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
+# 关键：强制设置 RUSTFLAGS，把 core 库路径塞进去，rustc 必须找到！
+export RUSTFLAGS="--sysroot=${RUST_SYSROOT} -L ${CORE_LIB_PATH} --sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib"
 cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi
 CORE_SO="${JNI_LIBS_DIR}/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
