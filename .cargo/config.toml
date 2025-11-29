@@ -1,0 +1,28 @@
+[build]
+# 全局参数：主crate和所有依赖都会继承
+rustflags = [
+  "--sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
+  "-L", "/path/to/ndk/sysroot/usr/lib/aarch64-linux-android/24",
+  "-L", "/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
+  "-l:libunwind.a",  # 使用静态unwind库
+  "-l:libdl.so",
+  "-l:liblog.so",
+  "-l:libm.so",
+  "-l:libc.so",
+  "-C", "link-arg=--allow-shlib-undefined"
+]
+
+[target.aarch64-linux-android]
+# 目标架构专属配置
+linker = "/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
+rustflags = [
+  "--sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
+  "-L", "/path/to/ndk/sysroot/usr/lib/aarch64-linux-android/24",
+  "-L", "/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
+  "-l:libunwind.a",
+  "-l:libdl.so",
+  "-l:liblog.so",
+  "-l:libm.so",
+  "-l:libc.so",
+  "-C", "link-arg=--allow-shlib-undefined"
+]
