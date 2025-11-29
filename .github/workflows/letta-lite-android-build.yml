@@ -95,6 +95,12 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
+      # 🔧 新增：强制锁定 libc/cfg-if 到兼容版本（解决编译失败）
+      - name: Force lock libc/cfg-if to compatible versions
+        run: |
+          cargo update -p libc --precise 0.2.150
+          cargo update -p cfg-if --precise 1.0.0
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
