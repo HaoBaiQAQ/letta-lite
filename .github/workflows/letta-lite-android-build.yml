@@ -50,6 +50,7 @@ jobs:
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
+          echo "CLANG_VERSION=$CLANG_VERSION" >> $GITHUB_ENV  # 传递 clang 版本号
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
       # 🔧 核心修复：1. 修正验证逻辑；2. 参考你旧工作流，去掉多余的 --cross-compile-prefix
@@ -103,34 +104,22 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 终极核心修复：全局 Cargo config，写死绝对路径，确保所有库（含 slug）都能继承
-      - name: Create Cargo config（全局生效，解决 slug 库找不到路径问题）
+      # 🔧 终极终极修复：删除 Cargo config，改用环境变量全局注入 RUSTFLAGS（优先级最高，100% 传递）
+      - name: 全局注入 RUSTFLAGS（确保所有库都能拿到路径）
         run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << EOF
-          [build]
-          target = "aarch64-linux-android"  # 全局指定目标架构，无歧义
-
-          [target.aarch64-linux-android]
-          linker = "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
-          rustflags = [
-              "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
-              # 写死系统库路径（工作流环境固定，100% 正确）
-              "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24",
-              # 写死 libunwind.a 路径（避免变量传递问题）
-              "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
-              # 写死 OpenSSL 路径（工作流固定输出目录）
-              "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-              # 精准引用所有必需库，链接器直接找到
-              "-l:libunwind.a",
-              "-l:libdl.so",
-              "-l:liblog.so",
-              "-l:libm.so",
-              "-l:libc.so",
-              # 允许未定义符号，避免冗余报错
-              "-C", "link-arg=--allow-shlib-undefined"
-          ]
-          EOF
+          echo "RUSTFLAGS= \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -L ${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24 \
+            -L ${{ env.UNWIND_LIB_PATH }} \
+            -L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
+            -l:libunwind.a \
+            -l:libdl.so \
+            -l:liblog.so \
+            -l:libm.so \
+            -l:libc.so \
+            -C link-arg=--allow-shlib-undefined \
+            -C linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld \
+          " >> $GITHUB_ENV
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
