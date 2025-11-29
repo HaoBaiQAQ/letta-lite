@@ -45,8 +45,8 @@ echo -e "  - NDK 路径：${NDK_PATH}"
 echo -e "  - OpenSSL 路径：${OPENSSL_LIB_DIR}"
 echo -e "  - 链接器：${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER}"
 
-# 简化 RUSTFLAGS（路径已由工作流全局注入，避免冲突）
-export RUSTFLAGS="-C linker=${NDK_TOOLCHAIN_BIN}/ld.lld -C link-arg=-fuse-ld=lld"
+# 🔧 唯一修改：删掉多余的 -C link-arg=-fuse-ld=lld
+export RUSTFLAGS="-C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 安装目标平台标准库
 echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
