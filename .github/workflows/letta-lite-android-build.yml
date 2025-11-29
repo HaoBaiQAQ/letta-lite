@@ -95,6 +95,10 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
+      # 🔧 新增：显式安装目标架构标准库（解决 can't find crate for 'core'）
+      - name: Install aarch64-android target stdlib
+        run: rustup target add ${{ env.TARGET_ARCH }} --toolchain stable
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
