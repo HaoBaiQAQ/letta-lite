@@ -95,9 +95,12 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      # 🔧 新增：显式安装目标架构标准库（解决 can't find crate for 'core'）
-      - name: Install aarch64-android target stdlib
-        run: rustup target add ${{ env.TARGET_ARCH }} --toolchain stable
+      # 🔧 第一重保险：工作流中强制安装目标架构（清理缓存）
+      - name: Force install aarch64-android target (workflow level)
+        run: |
+          rustup target uninstall ${{ env.TARGET_ARCH }} 2>/dev/null || true  # 先卸载，清理缓存
+          rustup target install ${{ env.TARGET_ARCH }} --toolchain stable  # 重新安装
+          rustup target list | grep "${{ env.TARGET_ARCH }}"  # 验证安装成功
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
@@ -108,17 +111,17 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（极简配置，避免冲突）
+      - name: Create Cargo config（必要配置，不能删！）
         run: |
-          mkdir -p .cargo
+          mkdir -p .cargo  # 创建Rust配置目录，存放target适配规则
           cat > .cargo/config.toml << EOF
           [target.aarch64-linux-android]
           rustflags = [
-              "--sysroot=${{ env.NDK_SYSROOT }}",  # 唯一必要的适配：指定 NDK 系统根目录
-              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",  # 系统库路径
-              "-L", "${{ env.UNWIND_LIB_PATH }}",  # libunwind 路径
-              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",  # OpenSSL 路径
-              # 仅保留必要库引用，删掉所有可能冲突的 cfg 配置
+              "--sysroot=${{ env.NDK_SYSROOT }}",  # 告诉Rust用NDK的系统库
+              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",  # Android系统库路径
+              "-L", "${{ env.UNWIND_LIB_PATH }}",  # libunwind静态库路径
+              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",  # OpenSSL交叉编译后的路径
+              # 必要库引用：链接Android系统库和静态依赖
               "-l", "static=unwind",
               "-l", "dylib=dl",
               "-l", "dylib=log",
@@ -131,7 +134,7 @@ jobs:
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译）
+      - name: Execute 64bit-only build script（一键编译，含第二重保险）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
