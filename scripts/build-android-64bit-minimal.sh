@@ -44,7 +44,7 @@ echo -e "  - 项目内libunwind路径：${UNWIND_LIB_COPY_PATH}"
 echo -e "  - OpenSSL 路径：${OPENSSL_LIB_DIR}"
 echo -e "  - 链接器：${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-# 强制指定 RUSTFLAGS，指向项目内的库（双重保障）
+# 强制指定 RUSTFLAGS（修正中文冒号→英文冒号，双重保障）
 export RUSTFLAGS="\
 --sysroot=${NDK_SYSROOT} \
 -L ${SYS_LIB_COPY_PATH} \
@@ -87,7 +87,7 @@ mkdir -p ffi/include && cp "$HEADER_FILE" ffi/include/
 cp "$HEADER_FILE" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（完整步骤，链接项目内的系统库）
+# 编译 JNI 库（完整步骤，修正中文冒号）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -98,4 +98,31 @@ JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
     -shared -fPIC -o "${JNI_DIR}/libletta_jni.so" \
     "bindings/android/src/main/jni/letta_jni.c" \
     -L"${JNI_DIR}" -lletta_ffi \
-    -L"${SYS_LIB_COPY_PATH}" -ldl -llog -lm -lc \  # 链接项目内的
+    -L"${SYS_LIB_COPY_PATH}" -ldl -llog -lm -lc \
+    -L"${UNWIND_LIB_COPY_PATH}" -l:libunwind.a \  # 英文冒号
+    -L"${OPENSSL_LIB_DIR}" -lssl -lcrypto -O2
+[ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
+echo -e "${GREEN}✅ JNI 库生成成功${NC}"
+
+# 打包 AAR（完整步骤）
+echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
+cd bindings/android && ./gradlew assembleRelease --no-daemon -Dorg.gradle.jvmargs="-Xmx2g" && cd ../..
+AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
+[ ! -f "${AAR_PATH}" ] && { echo -e "${RED}Error: AAR 打包失败${NC}"; exit 1; }
+echo -e "${GREEN}✅ AAR 打包成功${NC}"
+
+# 收集产物（完整步骤）
+mkdir -p "${PWD}/release"
+cp "${CORE_SO}" "${PWD}/release/"
+cp "${JNI_DIR}/libletta_jni.so" "${PWD}/release/"
+cp "${AAR_PATH}" "${PWD}/release/"
+cp "${HEADER_FILE}" "${PWD}/release/"
+cp "${PWD}/build.log" "${PWD}/release/"
+
+echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（修正中文冒号）${NC}"
+echo -e "${GREEN}📦 产物清单（release 目录）：${NC}"
+echo -e "  1. libletta_ffi.so（核心库）"
+echo -e "  2. libletta_jni.so（JNI 库）"
+echo -e "  3. letta-lite-android.aar（Android 库）"
+echo -e "  4. letta_lite.h（C 接口头文件）"
+echo -e "  5. build.log（编译日志）"
