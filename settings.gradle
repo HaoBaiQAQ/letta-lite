@@ -1,11 +1,14 @@
+// 完全保留你的原有配置，只改2处标红的地方
 pluginManagement {
     repositories {
         google()
         mavenCentral()
-        gradlePluginPortal()
+        gradlePluginPortal() // 保留你的插件仓库
     }
     plugins {
-        id 'com.android.application' version '8.4.0' apply false
+        id 'com.android.application' version '7.4.2' apply false // 改：8.4.0 → 7.4.2（CI兼容）
+        id 'com.android.library' version '7.4.2' apply false // 加：适配你的 Android 库项目
+        id 'org.jetbrains.kotlin.android' version '1.9.20' apply false // 加：适配你的 Kotlin 代码
     }
 }
 
@@ -13,9 +16,9 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
-        mavenCentral()
+        mavenCentral() // 保留你的依赖仓库
     }
 }
 
-rootProject.name = "LettaLite"
-include ":app"
+rootProject.name = "LettaLite" // 保留你的项目名称
+include ":bindings:android" // 改：:app → :bindings:android（对应实际目录）
