@@ -104,7 +104,7 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（修复 Rust 参数格式 + 适配 libc）
+      - name: Create Cargo config（修复 --cfg 参数格式）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -114,10 +114,10 @@ jobs:
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              # 🔧 保留有效适配参数，删掉 Rust 不识别的 -m 开头参数
-              "--cfg", "android_api_level=24",
-              "--cfg", 'libc_no_extra_traits',
-              # 标准库引用（已修复格式）
+              # 🔧 修复：--cfg 键值对必须用引号括起来（Rust 要求）
+              "--cfg", '"android_api_level=24"',
+              "--cfg", '"libc_no_extra_traits"',
+              # 标准库引用（格式正确）
               "-l", "static=unwind",
               "-l", "dylib=dl",
               "-l", "dylib=log",
