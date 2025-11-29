@@ -99,16 +99,44 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 新增：验证 .cargo/config.toml 配置是否存在且有效
-      - name: Verify Cargo config
+      # 🔧 自动创建正确的 Cargo config（关键！不用你手动新建）
+      - name: Auto-create Cargo config (正确路径，自动生效)
         run: |
-          echo -e "\n✅ 检查 .cargo/config.toml 是否存在："
-          ls -la .cargo/config.toml || echo "⚠️ 配置文件不存在"
-          echo -e "\n✅ 打印配置文件内容："
-          cat .cargo/config.toml || echo "⚠️ 配置文件为空"
-          echo -e "\n✅ 检查 Cargo 是否识别配置："
-          cargo config get build.rustflags || echo "⚠️ build.rustflags 未识别"
-          cargo config get target.aarch64-linux-android.rustflags || echo "⚠️ target.rustflags 未识别"
+          mkdir -p .cargo
+          # 自动填入正确的 NDK 路径，无占位符
+          cat > .cargo/config.toml << EOF
+          [build]
+          rustflags = [
+            "--sysroot=${{ env.NDK_SYSROOT }}",
+            "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+            "-L", "${{ env.UNWIND_LIB_PATH }}",
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l:libunwind.a",
+            "-l:libdl.so",
+            "-l:liblog.so",
+            "-l:libm.so",
+            "-l:libc.so",
+            "-C", "link-arg=--allow-shlib-undefined"
+          ]
+
+          [target.aarch64-linux-android]
+          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"  # 自动填入正确的 linker 路径
+          rustflags = [
+            "--sysroot=${{ env.NDK_SYSROOT }}",
+            "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+            "-L", "${{ env.UNWIND_LIB_PATH }}",
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l:libunwind.a",
+            "-l:libdl.so",
+            "-l:liblog.so",
+            "-l:libm.so",
+            "-l:libc.so",
+            "-C", "link-arg=--allow-shlib-undefined"
+          ]
+          EOF
+          # 验证配置文件
+          echo -e "\n✅ 自动生成的 config.toml 内容："
+          cat .cargo/config.toml
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
