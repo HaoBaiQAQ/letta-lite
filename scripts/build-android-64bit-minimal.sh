@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 核心环境变量（不用改）
+# 核心环境变量（优化 Rust 编译参数）
 export TARGET="aarch64-linux-android"
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-21}
 export NDK_HOME=${NDK_PATH:-"/usr/local/lib/android/sdk/ndk/27.3.13750724"}
@@ -9,24 +9,25 @@ export OPENSSL_DIR=${OPENSSL_INSTALL_DIR:-"/home/runner/work/letta-lite/letta-li
 export SYS_LIB_PATH=${SYS_LIB_PATH:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 
-# 动态获取 Rust 标准库路径（自动适配 CI）
+# 🔧 修复1：动态获取 Rust 标准库路径，简化 RUSTFLAGS（去掉冲突参数）
 export RUST_SYSROOT=$(rustc --print sysroot)
 export RUST_STD_PATH="${RUST_SYSROOT}/lib/rustlib/${TARGET}/lib"
+export RUSTFLAGS="--sysroot=${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot -L ${RUST_STD_PATH} -L ${SYS_LIB_PATH} -L ${OPENSSL_DIR}/lib -C panic=abort"
 
-# 项目路径（不用改）
+# 项目路径
 export PROJECT_ROOT="${PWD}"
 export ANDROID_PROJECT_DIR="${PWD}/bindings/android"
 export JNI_LIBS_DIR="${ANDROID_PROJECT_DIR}/src/main/jniLibs/arm64-v8a"
 export HEADER_DIR="${ANDROID_PROJECT_DIR}/src/main/jni"
 export SETTINGS_FILE="${PROJECT_ROOT}/settings.gradle"
 
-# 颜色配置（不用改）
+# 颜色配置
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查（不用改）
+# 工具检查
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失工具 $1${NC}"
@@ -41,53 +42,52 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 配置极简 settings.gradle（不用改）
+# 🔧 修复2：强制安装目标平台+更新依赖（清除缓存）
+echo -e "\n${YELLOW}=== 修复 Rust 目标平台和依赖 ===${NC}"
+rustup target uninstall "${TARGET}" 2>/dev/null || true  # 先卸载旧的，避免缓存
+rustup target install "${TARGET}" --toolchain stable || { echo -e "${RED}Error: 安装目标平台失败${NC}"; exit 1; }
+cargo update  # 刷新依赖缓存，应用锁定的 libc/cfg-if 版本
+echo -e "${GREEN}✅ Rust 目标平台和依赖修复完成${NC}"
+
+# 配置 settings.gradle
 echo -e "\n${YELLOW}=== 配置 settings.gradle ===${NC}"
-cp "${SETTINGS_FILE}" "${SETTINGS_FILE}.ci.bak" 2>/dev/null || echo -e "${YELLOW}⚠️  备份 settings.gradle 失败${NC}"
+cp "${SETTINGS_FILE}" "${SETTINGS_FILE}.ci.bak" 2>/dev/null || true
 cat > "${SETTINGS_FILE}" << EOF
 rootProject.name = "LettaLite"
 include ":bindings:android"
 EOF
 echo -e "${GREEN}✅ settings.gradle 配置完成${NC}"
 
-# 验证项目完整性（不用改）
+# 验证项目完整性
 echo -e "\n${YELLOW}=== 验证项目完整性 ===${NC}"
 [ ! -f "${ANDROID_PROJECT_DIR}/build.gradle" ] && { echo -e "${RED}Error: 缺失 build.gradle${NC}"; exit 1; }
 [ ! -f "${HEADER_DIR}/letta_jni.c" ] && { echo -e "${RED}Error: 缺失 JNI 代码${NC}"; exit 1; }
 [ ! -d "${ANDROID_PROJECT_DIR}/src/main/java" ] && { echo -e "${RED}Error: 缺失 Kotlin/Java 代码${NC}"; exit 1; }
 echo -e "${GREEN}✅ 项目文件完整${NC}"
 
-# 验证 CI 环境（不用改）
+# 验证 CI 环境
 echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 [ -z "${NDK_TOOLCHAIN_BIN}" ] && { echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 未提供${NC}"; exit 1; }
 [ -z "${NDK_SYSROOT}" ] && { echo -e "${RED}Error: NDK_SYSROOT 未提供${NC}"; exit 1; }
-
-# 自动安装 Rust 目标平台
-if [ ! -d "${RUST_STD_PATH}" ]; then
-    echo -e "${YELLOW}安装 Rust 目标平台 ${TARGET}...${NC}"
-    rustup target add "${TARGET}" --toolchain stable || exit 1
-    export RUST_SYSROOT=$(rustc --print sysroot)
-    export RUST_STD_PATH="${RUST_SYSROOT}/lib/rustlib/${TARGET}/lib"
-fi
-
 [ ! -d "${OPENSSL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 编译核心库（不用改）
+# 🔧 修复3：编译 Rust 核心库（去掉激进优化，确保基础依赖编译）
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
-cargo ndk --platform "${ANDROID_API_LEVEL}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
+# 不用 --profile mobile（避免激进优化），用 --release 基础优化，优先保证编译通过
+cargo ndk --platform "${ANDROID_API_LEVEL}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi
 CORE_SO="${JNI_LIBS_DIR}/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功${NC}"
 
-# 生成头文件（不用改）
+# 生成头文件
 echo -e "\n${YELLOW}=== 生成 C 头文件 ===${NC}"
 cbindgen --crate letta-ffi --lang c --output "${HEADER_DIR}/letta_lite.h"
 HEADER_FILE="${HEADER_DIR}/letta_lite.h"
 [ ! -f "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 头文件生成成功${NC}"
 
-# 编译 JNI 库（不用改）
+# 编译 JNI 库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 "${CC_aarch64_linux_android:-${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang}" \
     --sysroot="${NDK_SYSROOT}" \
@@ -107,11 +107,10 @@ JNI_SO="${JNI_LIBS_DIR}/libletta_jni.so"
 [ ! -f "${JNI_SO}" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功${NC}"
 
-# 打包 AAR（关键：用 Gradle 7.5，自动下载）
+# 打包 AAR（沿用之前的 Gradle 7.5 配置）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd "${ANDROID_PROJECT_DIR}" || exit 1
 
-# 生成 Gradle 7.5 wrapper（自动下载 7.5 版本，满足插件要求）
 echo -e "${YELLOW}生成 Gradle 7.5 兼容版 gradlew...${NC}"
 gradle wrapper --gradle-version 7.5 --distribution-type all || {
     echo -e "${RED}gradlew 生成失败，用系统 Gradle 兜底...${NC}"
@@ -188,10 +187,10 @@ cp "${HEADER_FILE}" "${PROJECT_ROOT}/release/" 2>/dev/null
 
 # 验证结果
 if [ -f "${AAR_FINAL}" ]; then
-    echo -e "\n${GREEN}🎉 所有产物生成成功！${NC}"
+    echo -e "\n${GREEN}🎉 所有产物生成成功！！！${NC}"
     echo -e "${GREEN}📦 release 目录包含：${NC}"
     ls -l "${PROJECT_ROOT}/release/"
-    echo -e "\n${YELLOW}🚀 AAR 可直接导入 Android 项目使用！${NC}"
+    echo -e "\n${YELLOW}🚀 终于搞定所有坑！AAR 可直接导入 Android 项目使用！${NC}"
 else
     echo -e "\n${RED}❌ AAR 打包失败${NC}"
     exit 1
