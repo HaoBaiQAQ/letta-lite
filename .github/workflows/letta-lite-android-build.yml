@@ -52,21 +52,19 @@ jobs:
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
-      # 🔧 核心修复：1. 修正验证逻辑；2. 参考你旧工作流，去掉多余的 --cross-compile-prefix
+      # 🔧 核心修复：1. 修正验证逻辑；2. 去掉多余的 --cross-compile-prefix
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          # 参考你旧工作流的简洁配置，只保留必要参数（避免冗余冲突）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
-          # 去掉多余的 --cross-compile-prefix，和你旧工作流保持一致
           ./Configure android-arm64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
@@ -75,21 +73,19 @@ jobs:
           make install_sw
           echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
-          # 🔧 关键修复：判断逻辑反过来！AArch64 = 正确，不是错误！
+          # 🔧 验证 OpenSSL 架构
           LIB_SSL="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
           TEMP_DIR=$(mktemp -d)
           cd $TEMP_DIR
           ar -x "$LIB_SSL" $(ar -t "$LIB_SSL" | head -n 1)
           O_FILE=$(ls -1 | head -n 1)
-          echo -e "\n🔍 验证 .o 文件架构（readelf 检测）："
+          echo -e "\n🔍 验证 .o 文件架构："
           readelf -h "$O_FILE" | grep -E "Class|Machine"
-          
-          # 正确判断：Machine 是 AArch64 或 183（aarch64 编号），就判定为正确
           MACHINE=$(readelf -h "$O_FILE" | grep "Machine" | awk '{print $2}')
           if [ "$MACHINE" = "183" ] || [ "$MACHINE" = "AArch64" ]; then
-            echo -e "${GREEN}✅ OpenSSL 架构正确（aarch64/AArch64）${NC}"
+            echo -e "${GREEN}✅ OpenSSL 架构正确${NC}"
           else
-            echo -e "${RED}❌ OpenSSL 架构错误！当前 Machine 类型：$MACHINE${NC}"
+            echo -e "${RED}❌ OpenSSL 架构错误！$MACHINE${NC}"
             exit 1
           fi
           cd - && rm -rf $TEMP_DIR
@@ -102,22 +98,6 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
-
-      # 🔧 终极终极终极修复：目标架构专属 Rustflags，强制传递给所有依赖（含 slug）
-      - name: 注入目标架构专属 Rustflags（100% 传递，必生效）
-        run: |
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=\
-          --sysroot=${{ env.NDK_SYSROOT }} \
-          -L ${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24 \
-          -L ${{ env.UNWIND_LIB_PATH }} \
-          -L ${{ env.OPENSSL_INSTALL_DIR }}/lib \
-          -l:libunwind.a \
-          -l:libdl.so \
-          -l:liblog.so \
-          -l:libm.so \
-          -l:libc.so \
-          -C link-arg=--allow-shlib-undefined \
-          -C linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" >> $GITHUB_ENV
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
