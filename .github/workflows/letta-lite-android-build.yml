@@ -104,7 +104,7 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（只传路径，不重复指定 linker）
+      - name: Create Cargo config（修复 rustc 兼容格式）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -114,11 +114,12 @@ jobs:
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              "-l:libunwind.a",
-              "-l:libdl.so",
-              "-l:liblog.so",
-              "-l:libm.so",
-              "-l:libc.so",
+              # 修复：rustc 支持的标准库引用格式
+              "-l", "static=unwind",
+              "-l", "dylib=dl",
+              "-l", "dylib=log",
+              "-l", "dylib=m",
+              "-l", "dylib=c",
               "-C", "link-arg=--allow-shlib-undefined"
           ]
           EOF
