@@ -1,23 +1,19 @@
-// 🔧 原作者的核心配置：buildscript + apply plugin（适配 Gradle 4.4.1）
 buildscript {
     repositories {
-        google()  // 必须有，安卓插件只在这下载
+        google()
         mavenCentral()
         gradlePluginPortal()
     }
     dependencies {
-        // 明确安卓插件和 Kotlin 插件的依赖（版本和你原有一致）
         classpath 'com.android.tools.build:gradle:7.4.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20"
     }
 }
 
-// 🔧 原作者的插件应用方式：放弃 plugins 块，用 apply plugin
 apply plugin: 'com.android.library'
 apply plugin: 'org.jetbrains.kotlin.android'
 apply plugin: 'maven-publish'
 
-// 你的原有配置（完全不变，保留所有内容）
 android {
     namespace 'ai.letta.lite'
     compileSdk 34
