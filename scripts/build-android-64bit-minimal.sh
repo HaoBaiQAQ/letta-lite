@@ -119,11 +119,11 @@ cp "$CORE_SO" "${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/"
 [ ! -f "$CORE_SO" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：$CORE_SO${NC}"
 
-# 🔧 修复：去掉 --config 参数，用 cbindgen 默认配置生成头文件
-echo -e "\n${YELLOW}=== 生成头文件（cbindgen 默认配置） ===${NC}"
+# 🔧 关键修复：指定 --lang c 生成纯 C 风格头文件，避免 C++ 头文件
+echo -e "\n${YELLOW}=== 生成头文件（纯 C 风格） ===${NC}"
 mkdir -p ffi/include bindings/android/src/main/jni
-# 直接生成，不依赖配置文件（默认配置足够 JNI 使用）
-cbindgen --crate letta-ffi --output ffi/include/letta_lite.h
+# 添加 --lang c 参数，强制生成 C 语言头文件（无 C++ 依赖）
+cbindgen --crate letta-ffi --lang c --output ffi/include/letta_lite.h
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "$HEADER_FILE" ]; then
     echo -e "${YELLOW}⚠️ cbindgen 生成失败，搜索自动生成的头文件...${NC}"
@@ -140,7 +140,7 @@ else
 fi
 echo -e "${GREEN}✅ 头文件生成成功：$HEADER_FILE${NC}"
 
-# 编译 JNI 库
+# 编译 JNI 库（C 编译器可正常解析 C 风格头文件）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
