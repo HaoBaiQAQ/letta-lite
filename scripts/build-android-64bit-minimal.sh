@@ -29,9 +29,6 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 🔧 修复1：去掉依赖CORE_LIB_PATH的冗余验证（之前一直卡这里，改用Rust自动识别）
-# （删除原“最终验证 core 库”步骤，避免依赖未定义环境变量）
-
 # 配置 settings.gradle（不用改）
 echo -e "\n${YELLOW}=== 配置 settings.gradle ===${NC}"
 cp "${SETTINGS_FILE}" "${SETTINGS_FILE}.ci.bak" 2>/dev/null || true
@@ -48,20 +45,23 @@ echo -e "\n${YELLOW}=== 验证项目完整性 ===${NC}"
 [ ! -d "${ANDROID_PROJECT_DIR}/src/main/java" ] && { echo -e "${RED}Error: 缺失 Kotlin/Java 代码${NC}"; exit 1; }
 echo -e "${GREEN}✅ 项目文件完整${NC}"
 
-# 🔧 修复2：统一OpenSSL路径变量（之前混用OPENSSL_DIR和OPENSSL_INSTALL_DIR）
+# 统一OpenSSL路径变量（修复混用问题）
 echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 [ -z "${NDK_TOOLCHAIN_BIN:-}" ] && { echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 未提供${NC}"; exit 1; }
 [ -z "${NDK_SYSROOT:-}" ] && { echo -e "${RED}Error: NDK_SYSROOT 未提供${NC}"; exit 1; }
 [ -z "${OPENSSL_INSTALL_DIR:-}" ] || [ ! -d "${OPENSSL_INSTALL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 🔧 修复3：简化RUSTFLAGS（去掉干扰Rust标准库识别的冗余参数）
+# 🔧 修复：编译 Rust 核心库（添加 libc 适配 + 明确链接器目标）
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
-# 只保留必要的链接路径，不干扰core库自动识别
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib"
-cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi
+# 关键修复：添加 Android 目标特性 + 链接器适配 NDK API 24
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib -C link-arg=--target=aarch64-linux-android24"
+# 强制 libc 适配 Android，避免特性冲突
+cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi \
+    --config "dependencies.libc.features = [\"android\"]" \
+    --config "dependencies.libc.default-features = false"
 CORE_SO="${JNI_LIBS_DIR}/libletta_ffi.so"
 [ ! -f "${CORE_SO}" ] && { echo -e "${RED}Error: 核心库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
@@ -73,7 +73,7 @@ HEADER_FILE="${HEADER_DIR}/letta_lite.h"
 [ ! -f "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 🔧 修复4：简化JNI编译器路径（不用依赖CC_aarch64_linux_android变量）
+# 简化JNI编译器路径（修复依赖冗余变量）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 "${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL:-24}-clang" \
     --sysroot="${NDK_SYSROOT}" \
@@ -81,11 +81,11 @@ echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
     -I"${JAVA_HOME:-/usr/lib/jvm/default}/include/linux" \
     -I"${NDK_SYSROOT}/usr/include" \
     -I"${HEADER_DIR}" \
-    -I"${OPENSSL_INSTALL_DIR}/include" \  # 补充OpenSSL头文件路径
+    -I"${OPENSSL_INSTALL_DIR}/include" \
     -shared -fPIC -o "${JNI_LIBS_DIR}/libletta_jni.so" \
     "${HEADER_DIR}/letta_jni.c" \
     -L"${JNI_LIBS_DIR}" \
-    -L"${OPENSSL_INSTALL_DIR}/lib" \  # 统一用OPENSSL_INSTALL_DIR
+    -L"${OPENSSL_INSTALL_DIR}/lib" \
     -L "${UNWIND_LIB_PATH:-}" \
     -lletta_ffi \
     -lssl -lcrypto \
@@ -94,7 +94,7 @@ JNI_SO="${JNI_LIBS_DIR}/libletta_jni.so"
 [ ! -f "${JNI_SO}" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_SO}${NC}"
 
-# 打包 AAR（不用改，保留你的兜底逻辑）
+# 打包 AAR（不用改，保留兜底逻辑）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd "${ANDROID_PROJECT_DIR}" || exit 1
 
@@ -106,7 +106,7 @@ gradle wrapper --gradle-version 7.5 --distribution-type all || {
         -Pandroid.compileSdkVersion=34 \
         -Pandroid.minSdkVersion=21 \
         -Pandroid.targetSdkVersion=34 \
-        -Pandroid.ndkPath="${NDK_PATH:-}"  # 去掉硬编码，优先用环境变量
+        -Pandroid.ndkPath="${NDK_PATH:-}"
 }
 chmod +x gradlew 2>/dev/null
 
@@ -177,7 +177,7 @@ if [ -f "${AAR_FINAL}" ]; then
     echo -e "\n${GREEN}🎉 所有产物生成成功！！！${NC}"
     echo -e "${GREEN}📦 release 目录包含：${NC}"
     ls -l "${PROJECT_ROOT}/release/"
-    echo -e "\n${YELLOW}🚀 终于搞定所有坑！AAR 可直接导入 Android 项目使用！${NC}"
+    echo -e "\n${YELLOW}🚀 AAR 可直接导入 Android 项目使用！${NC}"
 else
     echo -e "\n${RED}❌ AAR 打包失败${NC}"
     exit 1
