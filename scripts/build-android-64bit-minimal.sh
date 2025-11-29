@@ -16,37 +16,64 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查（优先确保 rustup 可用）
+# 🔧 先检测 rustup 路径，确保能找到命令
+find_rustup() {
+    echo -e "\n${YELLOW}=== 检测 rustup 路径 ===${NC}"
+    if command -v rustup &> /dev/null; then
+        RUSTUP_PATH=$(command -v rustup)
+        echo -e "${GREEN}✅ 找到 rustup：$RUSTUP_PATH${NC}"
+        return 0
+    else
+        # 尝试手动查找常见路径
+        POSSIBLE_PATHS=(
+            "/home/runner/.rustup/bin/rustup"
+            "/usr/local/cargo/bin/rustup"
+            "/home/runner/.cargo/bin/rustup"
+        )
+        for path in "${POSSIBLE_PATHS[@]}"; do
+            if [ -x "$path" ]; then
+                export PATH="$path:$PATH"
+                echo -e "${GREEN}✅ 手动找到 rustup：$path${NC}"
+                return 0
+            fi
+        done
+        echo -e "${RED}Error: 找不到 rustup 命令${NC}"
+        exit 1
+    fi
+}
+
+# 工具检查（先找 rustup）
+find_rustup
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失工具 $1${NC}"
         exit 1
     fi
 }
-check_command rustup
 check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 🔧 核心修复：强制安装目标平台标准库（含 core crate），重试+权限+ verbose 日志
+# 🔧 核心修复：不用 sudo，直接安装目标平台标准库（用户级权限足够）
 install_target_std() {
-    echo -e "\n${YELLOW}=== 强制安装目标平台标准库（aarch64-linux-android） ===${NC}"
-    # 指定 stable 工具链，避免歧义，加 sudo 确保权限，--verbose 查看安装日志
-    sudo rustup target add --toolchain stable --verbose "${TARGET}" || {
+    echo -e "\n${YELLOW}=== 安装目标平台标准库（aarch64-linux-android） ===${NC}"
+    # 直接用 rustup，不加 sudo，指定工具链确保生效
+    rustup target add --toolchain stable --verbose "${TARGET}" || {
         echo -e "${YELLOW}⚠️ 第一次安装失败，重试...${NC}"
-        sudo rustup target add --toolchain stable --verbose "${TARGET}" || {
+        rustup target add --toolchain stable --verbose "${TARGET}" || {
             echo -e "${RED}Error: 目标平台标准库安装失败${NC}"
+            # 打印详细日志排查
+            rustup show
+            rustup target list
             exit 1
         }
     }
-    # 验证安装结果（必须显示 "installed"）
+    # 严格验证安装结果
     if rustup target list | grep -q "${TARGET} (installed)"; then
         echo -e "${GREEN}✅ 目标平台标准库安装成功${NC}"
     else
-        echo -e "${RED}Error: 目标平台显示未安装，实际安装失败${NC}"
-        # 打印 rustup 状态，方便排查
+        echo -e "${RED}Error: 目标平台显示未安装${NC}"
         rustup target list
-        rustup show
         exit 1
     fi
 }
@@ -68,11 +95,9 @@ echo -e "  - 系统库路径：$SYS_LIB_COPY_PATH"
 echo -e "  - NDK SYSROOT：$NDK_SYSROOT"
 echo -e "  - 链接器：$NDK_TOOLCHAIN_BIN/ld.lld"
 
-# 🔧 重新拉取所有项目依赖（关联已安装的标准库）
+# 重新拉取所有项目依赖（关联已安装的标准库）
 echo -e "\n${YELLOW}=== 重新拉取所有项目依赖 ===${NC}"
-# 清除旧依赖缓存，确保重新关联标准库
 cargo clean -p letta-ffi --target "${TARGET}" || true
-# 拉取依赖时指定目标平台，确保依赖适配
 cargo fetch --target="${TARGET}" --verbose
 echo -e "${GREEN}✅ 项目依赖拉取完成${NC}"
 
@@ -84,7 +109,7 @@ export PKG_CONFIG_ALLOW_CROSS=1
 # 精简 RUSTFLAGS（和 Cargo config 一致）
 export RUSTFLAGS="--sysroot=$NDK_SYSROOT -L $SYS_LIB_COPY_PATH -L $UNWIND_LIB_COPY_PATH -L $OPENSSL_LIB_DIR -l libunwind.a -l libdl.so -l liblog.so -l libm.so -l libc.so -C link-arg=--allow-shlib-undefined -C linker=$NDK_TOOLCHAIN_BIN/ld.lld"
 
-# 编译核心库（带 --verbose 查看标准库引用情况）
+# 编译核心库
 echo -e "\n${YELLOW}=== 编译核心库（letta-ffi） ===${NC}"
 cargo build --workspace --target=${TARGET} --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/target/${TARGET}/mobile/libletta_ffi.so"
