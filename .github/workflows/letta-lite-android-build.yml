@@ -95,33 +95,49 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      # 🔧 第一重保险：工作流中强制安装目标架构（清理缓存）
-      - name: Force install aarch64-android target (workflow level)
+      # 🔧 关键修复：验证+强制指定 Rust 工具链路径（让 rustc 找到 core 库）
+      - name: Verify Rust target installation + fix path
         run: |
-          rustup target uninstall ${{ env.TARGET_ARCH }} 2>/dev/null || true  # 先卸载，清理缓存
-          rustup target install ${{ env.TARGET_ARCH }} --toolchain stable  # 重新安装
-          rustup target list | grep "${{ env.TARGET_ARCH }}"  # 验证安装成功
+          # 1. 再次强制安装（确保覆盖缓存）
+          rustup target uninstall ${{ env.TARGET_ARCH }} 2>/dev/null || true
+          rustup target install ${{ env.TARGET_ARCH }} --toolchain stable
+          # 2. 打印 Rust 工具链根目录（验证路径）
+          RUST_SYSROOT=$(rustc --print sysroot)
+          echo "RUST_SYSROOT=$RUST_SYSROOT" >> $GITHUB_ENV
+          echo "✅ Rust 工具链根目录：$RUST_SYSROOT"
+          # 3. 验证 core 库是否存在（直接检查文件）
+          CORE_LIB_PATH="$RUST_SYSROOT/lib/rustlib/${{ env.TARGET_ARCH }}/lib/libcore.rlib"
+          if [ -f "$CORE_LIB_PATH" ]; then
+            echo "✅ 找到 core 库：$CORE_LIB_PATH"
+          else
+            echo -e "${RED}❌ 未找到 core 库！路径：$CORE_LIB_PATH${NC}"
+            exit 1
+          fi
+          # 4. 显式告诉 Cargo 工具链路径（避免识别失败）
+          echo "CARGO_TARGET_DIR=$RUST_SYSROOT/lib/rustlib" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 新增：强制CI使用 Gradle 7.5（核心修复版本冲突）
+      # 🔧 强制 CI 用 Gradle 7.5
       - name: Set up Gradle 7.5
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（必要配置，不能删！）
+      # 🔧 必要配置：.cargo/config.toml（添加 Rust 工具链路径）
+      - name: Create Cargo config
         run: |
-          mkdir -p .cargo  # 创建Rust配置目录，存放target适配规则
+          mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [target.aarch64-linux-android]
           rustflags = [
-              "--sysroot=${{ env.NDK_SYSROOT }}",  # 告诉Rust用NDK的系统库
-              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",  # Android系统库路径
-              "-L", "${{ env.UNWIND_LIB_PATH }}",  # libunwind静态库路径
-              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",  # OpenSSL交叉编译后的路径
-              # 必要库引用：链接Android系统库和静态依赖
+              "--sysroot=${{ env.NDK_SYSROOT }}",
+              "--sysroot=${{ env.RUST_SYSROOT }}",  # 显式指定 Rust 标准库路径
+              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+              "-L", "${{ env.UNWIND_LIB_PATH }}",
+              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+              "-L", "${{ env.RUST_SYSROOT }}/lib/rustlib/${{ env.TARGET_ARCH }}/lib",  # 直接指向 core 库所在目录
               "-l", "static=unwind",
               "-l", "dylib=dl",
               "-l", "dylib=log",
@@ -131,10 +147,10 @@ jobs:
           ]
           EOF
 
-      - name: Prepare 64bit-only build script
+      - name: Prepare build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译，含第二重保险）
+      - name: Run build script
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
@@ -143,9 +159,10 @@ jobs:
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
+          export RUST_SYSROOT=${{ env.RUST_SYSROOT }}  # 传递给脚本
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
-      - name: Collect artifacts (SO + AAR + log)
+      - name: Collect artifacts
         run: |
           mkdir -p ./release
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" | grep -E "release" | head -n 1)
@@ -154,10 +171,10 @@ jobs:
           [ -z "$SO_FILE" ] && { echo "❌ SO 未找到"; exit 1; }
           cp "$AAR_FILE" ./release/letta-lite-android.aar
           cp "$SO_FILE" ./release/letta-lite-jni.so
-          cp ./build.log ./release/build.log
-          echo "✅ 产物收集完成：$(ls -l ./release/)"
+          cp build.log ./release/build.log
+          echo "✅ 产物收集完成"
 
-      - name: Upload to Artifacts (direct download)
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
