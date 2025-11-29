@@ -5,65 +5,85 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ANDROID_NDK_VERSION: 27.3.13750724
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
       TARGET_ARCH: aarch64-linux-android
       ANDROID_API_LEVEL: 24
       ARTIFACT_NAME: letta-lite-android-tianji1200
 
     steps:
-      - name: Checkout source code
+      - name: Checkout source code (with llama.cpp submodule)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Install dependencies
+      - name: Install base dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update --fix-missing
           sudo apt-get install -y \
-            rustc cargo make cbindgen openjdk-17-jdk \
+            rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config binutils
+          java -version
+          gradle -v
 
-      - name: Install Android NDK
+      - name: Install Android NDK + SDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: Find NDK paths
+      - name: 定位 NDK 路径 + 复制系统库到项目内（核心！我们去找库）
         run: |
-          # 定位NDK路径
+          export LANG=C.UTF-8
+          export LC_ALL=C.UTF-8
+          # 1. 找到 NDK 真实路径
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
-          [ -z "$NDK_PATH" ] && { echo "❌ NDK未找到"; exit 1; }
-          
-          # 定位关键目录
+          [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
+          # 2. 定义关键路径（系统库所在位置）
           NDK_TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           NDK_SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          UNWIND_LIB_PATH="$NDK_SYSROOT/usr/lib/aarch64-linux-android/24"
-          CLANG_UNWIND_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64"
-          
-          # 验证关键文件
-          [ ! -f "$CLANG_UNWIND_PATH/libunwind.a" ] && { echo "❌ libunwind.a未找到"; exit 1; }
-          
-          # 输出路径信息
+          # 系统库路径（libdl.so/liblog.so等在这里）
+          SYS_LIB_PATH="$NDK_SYSROOT/usr/lib/aarch64-linux-android/24"
+          # libunwind.a 路径（clang 自带的静态库）
+          UNWIND_LIB_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64"
+          # 3. 验证系统库是否存在
+          for lib in "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "$UNWIND_LIB_PATH/libunwind.a"; do
+            [ ! -f "$lib" ] && { echo "❌ 缺失系统库：$lib"; exit 1; }
+          done
+          # 4. 在项目内创建目录，复制系统库（让依赖库直接找到）
+          mkdir -p "${{ github.workspace }}/dependencies/lib/sys" "${{ github.workspace }}/dependencies/lib/unwind"
+          cp "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "${{ github.workspace }}/dependencies/lib/sys/"
+          cp "$UNWIND_LIB_PATH/libunwind.a" "${{ github.workspace }}/dependencies/lib/unwind/"
+          # 5. 传递路径到环境变量
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
-          echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
-          echo "CLANG_UNWIND_PATH=$CLANG_UNWIND_PATH" >> $GITHUB_ENV
+          echo "SYS_LIB_COPY_PATH=${{ github.workspace }}/dependencies/lib/sys" >> $GITHUB_ENV
+          echo "UNWIND_LIB_COPY_PATH=${{ github.workspace }}/dependencies/lib/unwind" >> $GITHUB_ENV
+          echo "✅ 系统库复制完成：$(ls -l ${{ github.workspace }}/dependencies/lib/sys/)"
 
-      - name: Copy NDK system libraries to dependency search path
+      - name: Compile OpenSSL for Android (android-arm64)
         run: |
-          # 创建依赖库目录（所有依赖都能找到）
-          mkdir -p dependencies/lib/aarch64-linux-android/24
-          mkdir -p dependencies/lib/clang/aarch64
-          
-          # 复制关键系统库
-          cp "$UNWIND_LIB_PATH/libdl.so" "$UNWIND_LIB_PATH/liblog.so" "$UNWIND_LIB_PATH/libm.so" "$UNWIND_LIB_PATH/libc.so" dependencies/lib/aarch64-linux-android/24/
-          cp "$CLANG_UNWIND_PATH/libunwind.a" dependencies/lib/clang/aarch64/
-          
-          # 验证文件复制
-          ls -l dependencies/lib/aarch64-linux-android/24/
-          ls -l dependencies/lib/clang/aarch64/
+          mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
+          cd ${{ env.OPENSSL_SRC_DIR }}
+          wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+          tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
+          ./Configure android-arm64 no-shared no-asm no-zlib \
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            -fPIC -march=armv8-a -mtune=cortex-a76
+          make -j$(nproc) V=1 | grep -E "CC|AR|LD|armv8-a|aarch64" || true
+          make install_sw
+          echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
       - name: Configure Rust environment
         uses: dtolnay/rust-toolchain@stable
@@ -71,29 +91,35 @@ jobs:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
 
-      - name: Auto-create Cargo config (指向复制的库)
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version=3.5.4 --locked
+
+      - name: Auto-create Cargo config（指向项目内复制的库）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [build]
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
-            "-L", "./dependencies/lib/aarch64-linux-android/24",  # 指向复制的系统库
-            "-L", "./dependencies/lib/clang/aarch64",            # 指向复制的libunwind.a
+            "-L", "${{ env.SYS_LIB_COPY_PATH }}",  # 项目内的系统库路径
+            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",  # 项目内的libunwind.a路径
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
             "-l:libunwind.a",
             "-l:libdl.so",
             "-l:liblog.so",
             "-l:libm.so",
             "-l:libc.so",
-            "-C", "link-arg=--allow-shlib-undefined"
+            "-C", "link-arg=--allow-shlib-undefined",
+            "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           ]
 
           [target.aarch64-linux-android]
           linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
-            "-L", "./dependencies/lib/aarch64-linux-android/24",
-            "-L", "./dependencies/lib/clang/aarch64",
+            "-L", "${{ env.SYS_LIB_COPY_PATH }}",
+            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
             "-l:libunwind.a",
             "-l:libdl.so",
             "-l:liblog.so",
@@ -105,9 +131,39 @@ jobs:
           [workspace]
           members = ["core", "ffi", "storage", "providers/toy", "providers/llama", "sync"]
           EOF
+          echo -e "\n✅ 生成的 Cargo config："
           cat .cargo/config.toml
 
-      - name: Compile with cargo-ndk (适配Workspace)
+      - name: Prepare 64bit-only build script
+        run: chmod +x ./scripts/build-android-64bit-minimal.sh
+
+      - name: Execute 64bit-only build script（一键编译，完整步骤）
         run: |
-          cargo install cargo-ndk --version=3.5.4 --locked
-          cargo ndk -t ${{ env.TARGET_ARCH }} --release -p letta-ffi
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export NDK_PATH=${{ env.NDK_PATH }}
+          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
+          export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
+          export SYS_LIB_COPY_PATH=${{ env.SYS_LIB_COPY_PATH }}
+          export UNWIND_LIB_COPY_PATH=${{ env.UNWIND_LIB_COPY_PATH }}
+          export TARGET=${{ env.TARGET_ARCH }}
+          export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
+          ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
+
+      - name: Collect artifacts (SO + AAR + log)
+        run: |
+          mkdir -p ./release
+          AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" | grep -E "release" | head -n 1)
+          SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" | grep -E "arm64" | head -n 1)
+          [ -z "$AAR_FILE" ] && { echo "❌ AAR 未找到"; exit 1; }
+          [ -z "$SO_FILE" ] && { echo "❌ SO 未找到"; exit 1; }
+          cp "$AAR_FILE" ./release/letta-lite-android.aar
+          cp "$SO_FILE" ./release/letta-lite-jni.so
+          cp ./build.log ./release/build.log
+          echo "✅ 产物收集完成：$(ls -l ./release/)"
+
+      - name: Upload to Artifacts (direct download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ./release/*
+          retention-days: 14
