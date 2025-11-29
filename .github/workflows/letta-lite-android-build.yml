@@ -35,24 +35,24 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递路径）
+      - name: 终极解决libunwind（用静态库libunwind.a + 传递路径）
         run: |
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
-          [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
+          [ -z "$NDK_PATH" ] && { echo "❌ NDK未找到"; exit 1; }
           CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang"
           CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
           UNWIND_LIB_FILE="$UNWIND_LIB_PATH/libunwind.a"
-          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到"; exit 1; }
+          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a未找到"; exit 1; }
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
-          echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
+          echo "✅ 找到libunwind.a：$UNWIND_LIB_FILE"
 
-      # 🔧 核心修复：1. 修正验证逻辑；2. 去掉多余的 --cross-compile-prefix
+      # 🔧 核心修复：1.修正验证逻辑；2.去掉多余的--cross-compile-prefix
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
@@ -71,21 +71,21 @@ jobs:
             -fPIC -march=armv8-a -mtune=cortex-a76
           make -j$(nproc) V=1 | grep -E "CC|AR|LD|armv8-a|aarch64" || true
           make install_sw
-          echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
+          echo "✅ OpenSSL编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
-          # 🔧 验证 OpenSSL 架构
+          # 🔧 验证OpenSSL架构
           LIB_SSL="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
           TEMP_DIR=$(mktemp -d)
           cd $TEMP_DIR
           ar -x "$LIB_SSL" $(ar -t "$LIB_SSL" | head -n 1)
           O_FILE=$(ls -1 | head -n 1)
-          echo -e "\n🔍 验证 .o 文件架构："
+          echo -e "\n🔍 验证.o文件架构："
           readelf -h "$O_FILE" | grep -E "Class|Machine"
           MACHINE=$(readelf -h "$O_FILE" | grep "Machine" | awk '{print $2}')
           if [ "$MACHINE" = "183" ] || [ "$MACHINE" = "AArch64" ]; then
-            echo -e "${GREEN}✅ OpenSSL 架构正确${NC}"
+            echo -e "${GREEN}✅ OpenSSL架构正确${NC}"
           else
-            echo -e "${RED}❌ OpenSSL 架构错误！$MACHINE${NC}"
+            echo -e "${RED}❌ OpenSSL架构错误！$MACHINE${NC}"
             exit 1
           fi
           cd - && rm -rf $TEMP_DIR
@@ -99,13 +99,13 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 终极锁定：全局 Cargo config，强制所有编译（含依赖库）继承参数
+      # 🔧 终极锁定：全局Cargo config，强制所有编译（含依赖库）继承参数
       - name: Create Cargo config（依赖库100%继承路径）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [build]
-          # 全局参数：主 crate + 所有依赖（含 slug）都继承
+          # 全局参数：主crate + 所有依赖（含slug）都继承
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
             "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
@@ -156,8 +156,8 @@ jobs:
           mkdir -p ./release
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" | grep -E "release" | head -n 1)
           SO_FILE=$(find ${{ github.workspace }} -name "libletta_jni.so" | grep -E "arm64" | head -n 1)
-          [ -z "$AAR_FILE" ] && { echo "❌ AAR 未找到"; exit 1; }
-          [ -z "$SO_FILE" ] && { echo "❌ SO 未找到"; exit 1; }
+          [ -z "$AAR_FILE" ] && { echo "❌ AAR未找到"; exit 1; }
+          [ -z "$SO_FILE" ] && { echo "❌ SO未找到"; exit 1; }
           cp "$AAR_FILE" ./release/letta-lite-android.aar
           cp "$SO_FILE" ./release/letta-lite-jni.so
           cp ./build.log ./release/build.log
