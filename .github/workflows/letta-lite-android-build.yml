@@ -99,6 +99,44 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
+      # 🔧 终极锁定：全局 Cargo config，强制所有编译（含依赖库）继承参数
+      - name: Create Cargo config（依赖库100%继承路径）
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << EOF
+          [build]
+          # 全局参数：主 crate + 所有依赖（含 slug）都继承
+          rustflags = [
+            "--sysroot=${{ env.NDK_SYSROOT }}",
+            "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+            "-L", "${{ env.UNWIND_LIB_PATH }}",
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l:libunwind.a",
+            "-l:libdl.so",
+            "-l:liblog.so",
+            "-l:libm.so",
+            "-l:libc.so",
+            "-C", "link-arg=--allow-shlib-undefined",
+            "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          ]
+
+          [target.aarch64-linux-android]
+          # 目标架构兜底：避免交叉编译场景遗漏
+          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          rustflags = [
+            "--sysroot=${{ env.NDK_SYSROOT }}",
+            "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+            "-L", "${{ env.UNWIND_LIB_PATH }}",
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l:libunwind.a",
+            "-l:libdl.so",
+            "-l:liblog.so",
+            "-l:libm.so",
+            "-l:libc.so",
+            "-C", "link-arg=--allow-shlib-undefined"
+          ]
+          EOF
+
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
