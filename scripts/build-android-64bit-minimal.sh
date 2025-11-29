@@ -21,7 +21,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查（确保 cbindgen 已安装）
+# 工具检查（确保 cbindgen 已安装，无需 --verbose）
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失工具 $1${NC}"
@@ -32,7 +32,7 @@ check_command rustup
 check_command cargo
 check_command cargo-ndk
 check_command clang
-check_command cbindgen  # 确保 cbindgen 工具可用
+check_command cbindgen
 
 # 验证 CI 环境变量路径
 echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
@@ -52,10 +52,10 @@ export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
 # 构建配置汇总
-echo -e "\n${YELLOW}=== 构建配置汇总（最终最终稳定版） ===${NC}"
+echo -e "\n${YELLOW}=== 构建配置汇总（最终无错版） ===${NC}"
 echo -e "  目标平台：${TARGET}（仅 arm64-v8a）"
 echo -e "  Android API：${ANDROID_API_LEVEL}"
-echo -e "  编译模式：panic=abort + 命令行 cbindgen 生成头文件"
+echo -e "  编译模式：panic=abort + cbindgen 无冗余参数"
 
 # 验证目标平台标准库
 echo -e "\n${YELLOW}=== 验证目标平台标准库 ===${NC}"
@@ -75,11 +75,11 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 🔧 修复：直接用 cbindgen 命令行生成头文件（无需 crate feature）
-echo -e "\n${YELLOW}=== 生成 C 头文件（命令行模式） ===${NC}"
+# 🔧 修复：移除 cbindgen 无效的 --verbose 参数（旧版本不支持）
+echo -e "\n${YELLOW}=== 生成 C 头文件（兼容旧版 cbindgen） ===${NC}"
 mkdir -p ffi/include "${PWD}/bindings/android/src/main/jni"
-# 直接调用 cbindgen 工具，指定 crate、语言和输出路径
-cbindgen --crate letta-ffi --lang c --output ffi/include/letta_lite.h --verbose
+# 核心修改：去掉 --verbose，仅保留必需参数
+cbindgen --crate letta-ffi --lang c --output ffi/include/letta_lite.h
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
     echo -e "${YELLOW}⚠️  头文件生成失败，尝试搜索备用路径...${NC}"
@@ -87,7 +87,6 @@ if [ ! -f "${HEADER_FILE}" ]; then
     [ -z "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
     cp "${HEADER_FILE}" ffi/include/
 fi
-# 复制头文件到 JNI 目录
 cp "${HEADER_FILE}" "${PWD}/bindings/android/src/main/jni/"
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
