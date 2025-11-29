@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 复用 CI 提供的所有环境变量（避免重复配置）
+# 复用 CI 提供的所有环境变量
 export TARGET=${TARGET_ARCH:-aarch64-linux-android}
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_HOME=${NDK_PATH:-"/usr/local/lib/android/sdk/ndk/27.3.13750724"}
@@ -10,7 +10,7 @@ export SYS_LIB_PATH=${SYS_LIB_PATH:-""}
 export UNWIND_LIB_PATH=${UNWIND_LIB_PATH:-""}
 export RUST_STD_PATH="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${TARGET}/lib"
 
-# 自动推导核心路径（复用 CI 变量）
+# 自动推导核心路径
 export NDK_TOOLCHAIN_BIN=${NDK_TOOLCHAIN_BIN:-""}
 export NDK_SYSROOT=${NDK_SYSROOT:-""}
 export PROJECT_SYS_LIB_DIR="${PWD}/dependencies/lib"
@@ -33,7 +33,7 @@ check_command cargo
 check_command cargo-ndk
 check_command clang
 
-# 🔧 关键验证：确保所有 CI 提供的路径有效
+# 验证 CI 环境变量路径
 echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
 [ -z "${NDK_TOOLCHAIN_BIN}" ] && { echo -e "${RED}Error: NDK_TOOLCHAIN_BIN 未提供${NC}"; exit 1; }
 [ -z "${NDK_SYSROOT}" ] && { echo -e "${RED}Error: NDK_SYSROOT 未提供${NC}"; exit 1; }
@@ -42,7 +42,7 @@ echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
 [ ! -d "${OPENSSL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 库路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ 所有 CI 路径验证通过${NC}"
 
-# 🔧 核心 RUSTFLAGS 配置（移除手动 linker，复用 CI 路径，统一 panic=abort）
+# RUSTFLAGS 配置（无手动 linker，避免冲突）
 export RUSTFLAGS="\
 --sysroot=${NDK_SYSROOT} \
 -L ${RUST_STD_PATH} \
@@ -53,20 +53,18 @@ $( [ -n "${UNWIND_LIB_PATH}" ] && echo "-L ${UNWIND_LIB_PATH}" ) \
 -C panic=abort \
 -C link-arg=--allow-shlib-undefined"
 
-# 交叉编译工具链配置（仅指定编译器，不手动指定 linker）
+# 交叉编译工具链配置
 export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL}-clang"
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 构建配置汇总（统一 API 级别）
-echo -e "\n${YELLOW}=== 构建配置汇总（无 linker 冲突版） ===${NC}"
+# 构建配置汇总
+echo -e "\n${YELLOW}=== 构建配置汇总（修正参数格式） ===${NC}"
 echo -e "  目标平台：${TARGET}"
-echo -e "  Android API：${ANDROID_API_LEVEL}（与 CI 统一）"
-echo -e "  Rust 标准库路径：${RUST_STD_PATH}"
-echo -e "  系统库路径：${SYS_LIB_PATH}"
+echo -e "  Android API：${ANDROID_API_LEVEL}"
 echo -e "  编译模式：panic=abort + cargo-ndk 自动 linker"
 
-# 验证目标平台标准库（双重保险）
+# 验证目标平台标准库
 echo -e "\n${YELLOW}=== 验证目标平台标准库 ===${NC}"
 if ! rustup target list | grep -q "${TARGET} (installed)"; then
     echo -e "${YELLOW}安装目标平台 ${TARGET}...${NC}"
@@ -74,13 +72,13 @@ if ! rustup target list | grep -q "${TARGET} (installed)"; then
 fi
 echo -e "${GREEN}✅ 目标平台标准库已就绪${NC}"
 
-# 🔧 编译核心库（让 cargo-ndk 自动处理 linker，避免冲突）
-echo -e "\n${YELLOW}=== 编译核心库（cargo-ndk 自动配置） ===${NC}"
+# 🔧 核心修复：修正 cargo-ndk 参数格式（用 --platform 指定 API 级别，避免与 -p 冲突）
+echo -e "\n${YELLOW}=== 编译核心库（修正参数格式） ===${NC}"
 cargo ndk \
+    --platform "${ANDROID_API_LEVEL}" \  # 正确参数：--platform 指定 API 级别
     -t arm64-v8a \
-    -p "${ANDROID_API_LEVEL}" \  # 统一 API 级别，与脚本一致
     -o "${PWD}/bindings/android/src/main/jniLibs" \
-    build --profile mobile --verbose -p letta-ffi
+    build --profile mobile --verbose -p letta-ffi  # -p 这里指定 crate，无冲突
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 if [ ! -f "${CORE_SO}" ]; then
     echo -e "${RED}Error: 核心库编译失败${NC}"
@@ -103,7 +101,7 @@ mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
 cp "${HEADER_FILE}" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（复用 CI 系统库路径）
+# 编译 JNI 库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -127,7 +125,7 @@ if [ ! -f "${JNI_DIR}/libletta_jni.so" ]; then
 fi
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_DIR}/libletta_jni.so${NC}"
 
-# 打包 AAR（复用 CI 项目内 gradlew）
+# 打包 AAR
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd bindings/android || { echo -e "${RED}Error: 进入 Android 目录失败${NC}"; exit 1; }
 if [ -f "gradlew" ]; then
@@ -139,7 +137,7 @@ else
 fi
 cd ../..
 
-# 收集产物（复用 CI 收集逻辑）
+# 收集产物
 echo -e "\n${YELLOW}=== 收集产物 ===${NC}"
 mkdir -p "${PWD}/release"
 AAR_PATH="bindings/android/build/outputs/aar/android-release.aar"
