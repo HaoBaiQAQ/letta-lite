@@ -4,12 +4,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 直接硬编码固定路径（GitHub Actions 中 NDK 27 路径永久不变）
-      NDK_PATH: /usr/local/lib/android/sdk/ndk/27.3.13750724
-      NDK_TOOLCHAIN_BIN: /usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin
-      NDK_SYSROOT: /usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-      SYS_LIB_PATH: /usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24
-      UNWIND_LIB_PATH: /usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64
+      ANDROID_NDK_VERSION: 27.3.13750724
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       OPENSSL_VERSION: 1.1.1w
       OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
@@ -38,28 +33,26 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: "ndk;27.3.13750724 platforms;android-24"
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 验证 NDK 路径是否存在（关键）
+      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递路径）
         run: |
-          if [ ! -d "${{ env.NDK_PATH }}" ]; then
-            echo "❌ NDK 路径不存在：${{ env.NDK_PATH }}"
-            exit 1
-          fi
-          if [ ! -f "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld" ]; then
-            echo "❌ linker 不存在：${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
-            exit 1
-          fi
-          echo "✅ NDK 路径验证通过"
+          export LANG=C.UTF-8
+          export LC_ALL=C.UTF-8
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
+          [ -z "$NDK_PATH" ] && { echo "❌ NDK 未找到"; exit 1; }
+          CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang"
+          CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
+          UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
+          UNWIND_LIB_FILE="$UNWIND_LIB_PATH/libunwind.a"
+          [ ! -f "$UNWIND_LIB_FILE" ] && { echo "❌ libunwind.a 未找到"; exit 1; }
+          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
+          echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
+          echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
+          echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
-      - name: 复制系统库到项目内（避免路径查找失败）
-        run: |
-          mkdir -p "${{ github.workspace }}/dependencies/lib/sys" "${{ github.workspace }}/dependencies/lib/unwind"
-          cp "${{ env.SYS_LIB_PATH }}/libdl.so" "${{ env.SYS_LIB_PATH }}/liblog.so" "${{ env.SYS_LIB_PATH }}/libm.so" "${{ env.SYS_LIB_PATH }}/libc.so" "${{ github.workspace }}/dependencies/lib/sys/"
-          cp "${{ env.UNWIND_LIB_PATH }}/libunwind.a" "${{ github.workspace }}/dependencies/lib/unwind/"
-          echo "✅ 系统库复制完成：$(ls -l ${{ github.workspace }}/dependencies/lib/sys/)"
-
-      - name: Compile OpenSSL for Android (固定路径)
+      - name: Compile OpenSSL for Android (android-arm64)
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
@@ -79,67 +72,72 @@ jobs:
           make install_sw
           echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
 
-      - name: 配置 Rust 环境 + 强制安装目标平台标准库
+          LIB_SSL="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
+          TEMP_DIR=$(mktemp -d)
+          cd $TEMP_DIR
+          ar -x "$LIB_SSL" $(ar -t "$LIB_SSL" | head -n 1)
+          O_FILE=$(ls -1 | head -n 1)
+          echo -e "\n🔍 验证 .o 文件架构（readelf 检测）："
+          readelf -h "$O_FILE" | grep -E "Class|Machine"
+          
+          MACHINE=$(readelf -h "$O_FILE" | grep "Machine" | awk '{print $2}')
+          if [ "$MACHINE" = "183" ] || [ "$MACHINE" = "AArch64" ]; then
+            echo -e "${GREEN}✅ OpenSSL 架构正确（aarch64/AArch64）${NC}"
+          else
+            echo -e "${RED}❌ OpenSSL 架构错误！当前 Machine 类型：$MACHINE${NC}"
+            exit 1
+          fi
+          cd - && rm -rf $TEMP_DIR
+
+      - name: Configure Rust environment
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           target: ${{ env.TARGET_ARCH }}
-          components: rust-std  # 强制安装核心标准库
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: 创建 Cargo config（硬编码固定路径，无任何变量）
+      # 🔧 新增：强制CI使用 Gradle 7.5（核心修复版本冲突）
+      - name: Set up Gradle 7.5
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 7.5
+
+      - name: Create Cargo config（只传路径，不重复指定 linker）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
-          [build]
-          rustflags = [
-            "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
-            "-L", "/home/runner/work/letta-lite/letta-lite/dependencies/lib/sys",
-            "-L", "/home/runner/work/letta-lite/letta-lite/dependencies/lib/unwind",
-            "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-            "-l", "libunwind.a",
-            "-l", "libdl.so",
-            "-l", "liblog.so",
-            "-l", "libm.so",
-            "-l", "libc.so",
-            "-C", "link-arg=--allow-shlib-undefined",
-            "-C", "linker=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
-          ]
-
           [target.aarch64-linux-android]
-          linker = "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
           rustflags = [
-            "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
-            "-L", "/home/runner/work/letta-lite/letta-lite/dependencies/lib/sys",
-            "-L", "/home/runner/work/letta-lite/letta-lite/dependencies/lib/unwind",
-            "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-            "-l", "libunwind.a",
-            "-l", "libdl.so",
-            "-l", "liblog.so",
-            "-l", "libm.so",
-            "-l", "libc.so",
-            "-C", "link-arg=--allow-shlib-undefined"
+              "--sysroot=${{ env.NDK_SYSROOT }}",
+              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
+              "-L", "${{ env.UNWIND_LIB_PATH }}",
+              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+              "-l:libunwind.a",
+              "-l:libdl.so",
+              "-l:liblog.so",
+              "-l:libm.so",
+              "-l:libc.so",
+              "-C", "link-arg=--allow-shlib-undefined"
           ]
-
-          [workspace]
-          members = ["core", "ffi", "storage", "providers/toy", "providers/llama", "sync"]
           EOF
-          echo -e "\n✅ 生成的 Cargo config："
-          cat .cargo/config.toml
 
-      - name: 准备构建脚本
+      - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: 执行构建脚本（提前缓存依赖）
+      - name: Execute 64bit-only build script（一键编译）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export NDK_PATH=${{ env.NDK_PATH }}
+          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
+          export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
+          export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
-      - name: 收集产物
+      - name: Collect artifacts (SO + AAR + log)
         run: |
           mkdir -p ./release
           AAR_FILE=$(find ${{ github.workspace }} -name "*.aar" | grep -E "release" | head -n 1)
@@ -151,7 +149,7 @@ jobs:
           cp ./build.log ./release/build.log
           echo "✅ 产物收集完成：$(ls -l ./release/)"
 
-      - name: 上传产物
+      - name: Upload to Artifacts (direct download)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
