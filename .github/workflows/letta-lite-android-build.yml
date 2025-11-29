@@ -99,11 +99,11 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 自动创建正确的 Cargo config（关键！不用你手动新建）
-      - name: Auto-create Cargo config (正确路径，自动生效)
+      # 🔧 自动创建 Workspace 级别的 Cargo config（关键！适配项目结构）
+      - name: Auto-create Cargo config (适配 Workspace，无占位符)
         run: |
           mkdir -p .cargo
-          # 自动填入正确的 NDK 路径，无占位符
+          # 自动填入 Workspace 根目录的正确路径
           cat > .cargo/config.toml << EOF
           [build]
           rustflags = [
@@ -120,7 +120,7 @@ jobs:
           ]
 
           [target.aarch64-linux-android]
-          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"  # 自动填入正确的 linker 路径
+          linker = "${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"  # 正确的 linker 路径
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
             "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
@@ -133,15 +133,19 @@ jobs:
             "-l:libc.so",
             "-C", "link-arg=--allow-shlib-undefined"
           ]
+
+          # Workspace 适配：确保所有子 crate 都继承配置
+          [workspace]
+          members = ["core", "ffi", "storage", "providers/toy", "providers/llama", "sync"]
           EOF
           # 验证配置文件
-          echo -e "\n✅ 自动生成的 config.toml 内容："
+          echo -e "\n✅ 自动生成的 config.toml 内容（Workspace 适配）："
           cat .cargo/config.toml
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译）
+      - name: Execute 64bit-only build script（一键编译，适配 Workspace）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
