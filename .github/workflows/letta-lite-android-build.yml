@@ -103,21 +103,25 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 最终修复：删掉重复的 linker 配置，只传递路径和库引用
-      - name: Create Cargo config（只传路径，不重复指定 linker）
+      # 🔧 终极核心修复：全局 Cargo config，写死绝对路径，确保所有库（含 slug）都能继承
+      - name: Create Cargo config（全局生效，解决 slug 库找不到路径问题）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
+          [build]
+          target = "aarch64-linux-android"  # 全局指定目标架构，无歧义
+
           [target.aarch64-linux-android]
+          linker = "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
           rustflags = [
-              "--sysroot=${{ env.NDK_SYSROOT }}",
-              # 系统库路径（100% 正确，直接写死）
-              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
-              # libunwind 路径
-              "-L", "${{ env.UNWIND_LIB_PATH }}",
-              # OpenSSL 路径
-              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              # 精准引用所有需要的库，确保找到
+              "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
+              # 写死系统库路径（工作流环境固定，100% 正确）
+              "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24",
+              # 写死 libunwind.a 路径（避免变量传递问题）
+              "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
+              # 写死 OpenSSL 路径（工作流固定输出目录）
+              "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
+              # 精准引用所有必需库，链接器直接找到
               "-l:libunwind.a",
               "-l:libdl.so",
               "-l:liblog.so",
