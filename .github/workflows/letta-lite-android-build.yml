@@ -99,60 +99,16 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 终极锁定：写死绝对路径 + 调试验证，确保配置100%生效
-      - name: Create Cargo config（写死路径+调试）
+      # 🔧 新增：验证 .cargo/config.toml 配置是否存在且有效
+      - name: Verify Cargo config
         run: |
-          # 1. 强制创建目录（加权限确保可写）
-          sudo mkdir -p .cargo && sudo chmod 777 .cargo
-          # 2. 写死绝对路径（工作流环境中固定不变）
-          cat > .cargo/config.toml << EOF
-          [build]
-          rustflags = [
-            "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
-            "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24",
-            "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
-            "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-            "-l:libunwind.a",
-            "-l:libdl.so",
-            "-l:liblog.so",
-            "-l:libm.so",
-            "-l:libc.so",
-            "-C", "link-arg=--allow-shlib-undefined",
-            "-C", "linker=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
-          ]
-
-          [target.aarch64-linux-android]
-          linker = "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld"
-          rustflags = [
-            "--sysroot=/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
-            "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24",
-            "-L", "/usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64",
-            "-L", "/home/runner/work/letta-lite/letta-lite/openssl-install/lib",
-            "-l:libunwind.a",
-            "-l:libdl.so",
-            "-l:liblog.so",
-            "-l:libm.so",
-            "-l:libc.so",
-            "-C", "link-arg=--allow-shlib-undefined"
-          ]
-          EOF
-          # 3. 调试验证：打印配置文件内容和路径，确认创建成功
-          echo -e "\n✅ 配置文件路径：$(pwd)/.cargo/config.toml"
-          echo -e "\n✅ 配置文件内容："
-          cat .cargo/config.toml
-          echo -e "\n✅ 目录权限："
-          ls -la .cargo
-
-      # 🔧 新增：验证配置是否被 Cargo 识别
-      - name: Verify Cargo config（确保 Cargo 读取配置）
-        run: |
-          # 执行 Cargo 命令，查看生效的配置（调试用）
-          echo -e "\n✅ 查看 build.rustflags 配置："
-          cargo config get build.rustflags || echo "⚠️ build.rustflags 未找到"
-          echo -e "\n✅ 查看 target.aarch64-linux-android.rustflags 配置："
-          cargo config get target.aarch64-linux-android.rustflags || echo "⚠️ target.rustflags 未找到"
-          echo -e "\n✅ 查看 target.aarch64-linux-android.linker 配置："
-          cargo config get target.aarch64-linux-android.linker || echo "⚠️ target.linker 未找到"
+          echo -e "\n✅ 检查 .cargo/config.toml 是否存在："
+          ls -la .cargo/config.toml || echo "⚠️ 配置文件不存在"
+          echo -e "\n✅ 打印配置文件内容："
+          cat .cargo/config.toml || echo "⚠️ 配置文件为空"
+          echo -e "\n✅ 检查 Cargo 是否识别配置："
+          cargo config get build.rustflags || echo "⚠️ build.rustflags 未识别"
+          cargo config get target.aarch64-linux-android.rustflags || echo "⚠️ target.rustflags 未识别"
 
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
