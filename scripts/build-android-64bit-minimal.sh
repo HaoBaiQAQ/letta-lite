@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 从 Workflow 接收环境变量（仅需传递 NDK 路径，无需手动传 libunwind 文件名）
+# 从 Workflow 接收环境变量（仅需传递核心变量）
 export TARGET=${TARGET:-aarch64-linux-android}
 export ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
 export NDK_HOME=${NDK_HOME:-"/usr/local/lib/android/sdk/ndk/25.2.9519653"}  # NDK 25 默认路径
 export OPENSSL_DIR=${OPENSSL_DIR:-"/home/runner/work/letta-lite/openssl-install"}
 
-# 自动推导依赖路径（NDK 25 专属）
+# 自动推导核心路径（不依赖 clang 版本路径）
 export NDK_TOOLCHAIN_BIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 export NDK_SYSROOT="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-# NDK 25 libunwind 默认路径（用户已接近，自动搜索）
-export UNWIND_LIB_PATH="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/14/lib/linux/aarch64"  # NDK 25 对应 clang 14
 
 # 颜色配置
 RED='\033[0;31m'
@@ -32,22 +30,23 @@ check_command cargo-ndk
 check_command clang
 check_command readelf
 
-# 🔧 核心修复：自动搜索 NDK 25 中的 libunwind.a，无需手动传递文件名
-echo -e "\n${YELLOW}=== 自动搜索 NDK 25 libunwind 静态库 ===${NC}"
-UNWIND_LIB_FILE=$(find "$UNWIND_LIB_PATH" -name "libunwind.a" -type f | head -n 1)
+# 🔧 核心修复：直接全局搜索 NDK 25 中的 libunwind.a（跳过固定路径）
+echo -e "\n${YELLOW}=== 全局搜索 NDK 25 libunwind 静态库 ===${NC}"
+# 直接从 NDK 根目录搜索，只找 aarch64 架构的 libunwind.a
+UNWIND_LIB_FILE=$(find "$NDK_HOME" -name "libunwind.a" -path "*/aarch64/*" -type f | head -n 1)
 if [ -z "${UNWIND_LIB_FILE}" ] || [ ! -f "${UNWIND_LIB_FILE}" ]; then
-    # 备用搜索路径（防止 NDK 25 目录结构差异）
-    echo -e "${YELLOW}⚠️  初始路径未找到，搜索整个 NDK 目录...${NC}"
-    UNWIND_LIB_FILE=$(find "$NDK_HOME" -name "libunwind.a" -path "*/aarch64/*" | head -n 1)
+    # 备用：放宽搜索条件，不限制架构路径（防止 NDK 目录结构特殊）
+    echo -e "${YELLOW}⚠️  未找到 aarch64 架构 libunwind，搜索所有架构...${NC}"
+    UNWIND_LIB_FILE=$(find "$NDK_HOME" -name "libunwind.a" -type f | head -n 1)
     if [ -z "${UNWIND_LIB_FILE}" ]; then
         echo -e "${RED}Error: NDK 25 中未找到 libunwind.a！${NC}"
-        echo -e "  搜索路径：$NDK_HOME"
+        echo -e "  搜索范围：$NDK_HOME"
         exit 1
     fi
-    # 更新 UNWIND_LIB_PATH 为实际找到的路径
-    UNWIND_LIB_PATH=$(dirname "${UNWIND_LIB_FILE}")
 fi
-echo -e "${GREEN}✅ 自动找到 libunwind 静态库：${NC}"
+# 自动获取实际路径
+UNWIND_LIB_PATH=$(dirname "${UNWIND_LIB_FILE}")
+echo -e "${GREEN}✅ 全局搜索找到 libunwind 静态库：${NC}"
 echo -e "  - 路径：${UNWIND_LIB_PATH}"
 echo -e "  - 文件：${UNWIND_LIB_FILE}"
 
@@ -69,12 +68,12 @@ echo -e "  - 库路径：${OPENSSL_LIB_DIR}"
 echo -e "  - 头文件路径：${OPENSSL_INCLUDE_DIR}"
 
 # 构建配置汇总
-echo -e "\n${YELLOW}=== 构建配置汇总（NDK 25 + build.rs 静态链接） ===${NC}"
+echo -e "\n${YELLOW}=== 构建配置汇总（NDK 25 + 全局搜索） ===${NC}"
 echo -e "  目标平台：${TARGET}"
 echo -e "  Android API：${ANDROID_API_LEVEL}"
-echo -e "  NDK 版本：25.2.9519653"
+echo -e "  NDK 路径：${NDK_HOME}"
 echo -e "  libunwind：${UNWIND_LIB_FILE}"
-echo -e "  构建模式：自动搜索 + build.rs 精准链接"
+echo -e "  构建模式：全局搜索 + build.rs 静态链接"
 
 # 安装目标平台标准库
 echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
@@ -191,8 +190,3 @@ cp "${HEADER_FILE}" "${PWD}/release/"
 echo -e "\n${GREEN}🎉 所有产物生成成功！适配 NDK 25 + 天玑1200${NC}"
 echo -e "${GREEN}📦 最终产物清单（release 目录）：${NC}"
 ls -l "${PWD}/release/"
-echo -e "\n${YELLOW}✅ 核心优势：${NC}"
-echo -e "  1. 自动搜索 NDK 25 自带 libunwind.a，无需手动配置文件名"
-echo -e "  2. build.rs 精准静态链接，无全局 RUSTFLAGS 污染"
-echo -e "  3. 保留栈展开功能，调试更友好"
-echo -e "  4. 完全适配 CI 流水线，配置极简"
