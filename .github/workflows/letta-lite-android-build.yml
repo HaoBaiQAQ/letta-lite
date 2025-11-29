@@ -12,6 +12,10 @@ jobs:
       TARGET_ARCH: aarch64-linux-android
       ANDROID_API_LEVEL: 24
       ARTIFACT_NAME: letta-lite-android-tianji1200
+      RUST_VERSION: 1.91.1
+      RUST_TARGET: aarch64-linux-android
+      RUST_TOOLCHAIN_DIR: /home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu
+      RUST_STD_DIR: ${{ github.workspace }}/rust-std
 
     steps:
       - name: Checkout source code (with llama.cpp submodule)
@@ -89,25 +93,36 @@ jobs:
           fi
           cd - && rm -rf $TEMP_DIR
 
-      - name: Configure Rust environment + 强制安装目标架构
+      - name: 暴力安装 Rust 工具链 + 手动下载 rust-std（跳过rustup bug）
         run: |
-          # 彻底清理缓存，重新安装
+          # 1. 清理旧工具链
+          rm -rf ${{ env.RUST_TOOLCHAIN_DIR }} 2>/dev/null || true
           rustup toolchain uninstall stable 2>/dev/null || true
-          rustup toolchain install stable
-          rustup target uninstall ${{ env.TARGET_ARCH }} 2>/dev/null || true
-          rustup target install ${{ env.TARGET_ARCH }} --toolchain stable
-          # 拿到 Rust 工具链根目录，硬编码到环境变量
-          RUST_SYSROOT=$(rustc --print sysroot)
-          CORE_LIB_PATH="$RUST_SYSROOT/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
-          echo "RUST_SYSROOT=$RUST_SYSROOT" >> $GITHUB_ENV
-          echo "CORE_LIB_PATH=$CORE_LIB_PATH" >> $GITHUB_ENV
-          # 验证 core 库存在（不存在直接报错，不浪费时间）
-          if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
-            echo -e "${RED}❌ 致命错误：core 库未安装！路径：$CORE_LIB_PATH${NC}"
+          # 2. 安装稳定版工具链
+          rustup toolchain install stable --version ${{ env.RUST_VERSION }}
+          # 3. 手动下载对应版本的 rust-std（官方地址，100%可靠）
+          mkdir -p ${{ env.RUST_STD_DIR }}
+          RUST_STD_URL="https://static.rust-lang.org/dist/${{ env.RUST_VERSION }}/rust-std-${{ env.RUST_TARGET }}.tar.gz"
+          echo "✅ 下载 rust-std：$RUST_STD_URL"
+          wget -q -O ${{ env.RUST_STD_DIR }}/rust-std.tar.gz $RUST_STD_URL
+          # 4. 解压到 rustlib 目录（直接覆盖，确保文件存在）
+          RUSTLIB_DIR="${{ env.RUST_TOOLCHAIN_DIR }}/lib/rustlib"
+          mkdir -p $RUSTLIB_DIR/${{ env.RUST_TARGET }}
+          tar -xvzf ${{ env.RUST_STD_DIR }}/rust-std.tar.gz -C $RUSTLIB_DIR/${{ env.RUST_TARGET }} --strip-components=3
+          # 5. 验证 core 库是否存在（不存在直接报错）
+          CORE_LIB_PATH="$RUSTLIB_DIR/${{ env.RUST_TARGET }}/lib/libcore.rlib"
+          if [ ! -f "$CORE_LIB_PATH" ]; then
+            echo -e "${RED}❌ 致命错误：core 库仍未找到！路径：$CORE_LIB_PATH${NC}"
+            ls -l "$RUSTLIB_DIR/${{ env.RUST_TARGET }}/lib/"  # 打印目录内容，方便排查
             exit 1
           else
-            echo -e "${GREEN}✅ 确认 core 库存在：$CORE_LIB_PATH/libcore.rlib${NC}"
+            echo -e "${GREEN}✅ 手动安装成功！core 库路径：$CORE_LIB_PATH${NC}"
+            ls -l "$CORE_LIB_PATH"  # 打印文件信息，确认存在
           fi
+          # 6. 保存路径到环境变量
+          echo "RUST_SYSROOT=${{ env.RUST_TOOLCHAIN_DIR }}" >> $GITHUB_ENV
+          echo "CORE_LIB_PATH=$CORE_LIB_PATH" >> $GITHUB_ENV
+          echo "RUSTLIB_DIR=$RUSTLIB_DIR" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
@@ -117,15 +132,15 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（极简，只留必要路径）
+      - name: Create Cargo config（暴力指定路径）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
-          [target.aarch64-linux-android]
+          [target.${{ env.RUST_TARGET }}]
           rustflags = [
               "--sysroot=${{ env.NDK_SYSROOT }}",
-              "--sysroot=${{ env.RUST_SYSROOT }}",  # 强制 Rust 标准库路径
-              "-L", "${{ env.CORE_LIB_PATH }}",     # 直接指向 core 库目录
+              "--sysroot=${{ env.RUST_SYSROOT }}",
+              "-L", "$(dirname ${{ env.CORE_LIB_PATH }})",
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
@@ -141,7 +156,7 @@ jobs:
       - name: Prepare build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Run build script（强制传递 RUSTFLAGS）
+      - name: Run build script（强制传递所有路径）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
@@ -152,6 +167,7 @@ jobs:
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
           export RUST_SYSROOT=${{ env.RUST_SYSROOT }}
           export CORE_LIB_PATH=${{ env.CORE_LIB_PATH }}
+          export RUSTLIB_DIR=${{ env.RUSTLIB_DIR }}
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
       - name: Collect artifacts
