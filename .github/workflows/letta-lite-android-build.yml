@@ -57,7 +57,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/dependencies/lib/sys" "${{ github.workspace }}/dependencies/lib/unwind"
           cp "$SYS_LIB_PATH/libdl.so" "$SYS_LIB_PATH/liblog.so" "$SYS_LIB_PATH/libm.so" "$SYS_LIB_PATH/libc.so" "${{ github.workspace }}/dependencies/lib/sys/"
           cp "$UNWIND_LIB_PATH/libunwind.a" "${{ github.workspace }}/dependencies/lib/unwind/"
-          # 5. 传递路径到环境变量（修正：确保路径无重复）
+          # 5. 传递路径到环境变量
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_TOOLCHAIN_BIN" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_SYSROOT" >> $GITHUB_ENV
@@ -94,22 +94,17 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Auto-create Cargo config（修正中文冒号→英文冒号）
+      - name: Auto-create Cargo config（最终修正：格式+精简参数）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [build]
+          # 只保留查询目标时必需的参数，-l参数在脚本中传递
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
-            "-L", "${{ env.SYS_LIB_COPY_PATH }}",  # 项目内的系统库路径
-            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",  # 项目内的libunwind.a路径
+            "-L", "${{ env.SYS_LIB_COPY_PATH }}",
+            "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
             "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-            "-l:libunwind.a",  # 修正：英文冒号
-            "-l:libdl.so",     # 修正：英文冒号
-            "-l:liblog.so",     # 修正：英文冒号
-            "-l:libm.so",      # 修正：英文冒号
-            "-l:libc.so",      # 修正：英文冒号
-            "-C", "link-arg=--allow-shlib-undefined",
             "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           ]
 
@@ -119,13 +114,7 @@ jobs:
             "--sysroot=${{ env.NDK_SYSROOT }}",
             "-L", "${{ env.SYS_LIB_COPY_PATH }}",
             "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
-            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-            "-l:libunwind.a",  # 修正：英文冒号
-            "-l:libdl.so",     # 修正：英文冒号
-            "-l:liblog.so",     # 修正：英文冒号
-            "-l:libm.so",      # 修正：英文冒号
-            "-l:libc.so",      # 修正：英文冒号
-            "-C", "link-arg=--allow-shlib-undefined"
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib"
           ]
 
           [workspace]
@@ -137,7 +126,7 @@ jobs:
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译，完整步骤）
+      - name: Execute 64bit-only build script（一键编译，修正参数格式）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
