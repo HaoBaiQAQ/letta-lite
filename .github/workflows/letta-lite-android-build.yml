@@ -104,20 +104,17 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（最终正确的 --cfg 参数格式）
+      - name: Create Cargo config（极简配置，避免冲突）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [target.aarch64-linux-android]
           rustflags = [
-              "--sysroot=${{ env.NDK_SYSROOT }}",
-              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
-              "-L", "${{ env.UNWIND_LIB_PATH }}",
-              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              # 🔧 最终正确格式：键值对用 key="value"，单个标识符直接写
-              "--cfg", 'android_api_level="24"',
-              "--cfg", "libc_no_extra_traits",
-              # 标准库引用（格式正确）
+              "--sysroot=${{ env.NDK_SYSROOT }}",  # 唯一必要的适配：指定 NDK 系统根目录
+              "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",  # 系统库路径
+              "-L", "${{ env.UNWIND_LIB_PATH }}",  # libunwind 路径
+              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",  # OpenSSL 路径
+              # 仅保留必要库引用，删掉所有可能冲突的 cfg 配置
               "-l", "static=unwind",
               "-l", "dylib=dl",
               "-l", "dylib=log",
