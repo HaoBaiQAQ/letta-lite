@@ -94,17 +94,22 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Auto-create Cargo config（最终修正：格式+精简参数）
+      - name: Auto-create Cargo config（完整参数，适配所有依赖）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [build]
-          # 只保留查询目标时必需的参数，-l参数在脚本中传递
           rustflags = [
             "--sysroot=${{ env.NDK_SYSROOT }}",
             "-L", "${{ env.SYS_LIB_COPY_PATH }}",
             "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
             "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l", "libunwind.a",
+            "-l", "libdl.so",
+            "-l", "liblog.so",
+            "-l", "libm.so",
+            "-l", "libc.so",
+            "-C", "link-arg=--allow-shlib-undefined",
             "-C", "linker=${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           ]
 
@@ -114,7 +119,13 @@ jobs:
             "--sysroot=${{ env.NDK_SYSROOT }}",
             "-L", "${{ env.SYS_LIB_COPY_PATH }}",
             "-L", "${{ env.UNWIND_LIB_COPY_PATH }}",
-            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib"
+            "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
+            "-l", "libunwind.a",
+            "-l", "libdl.so",
+            "-l", "liblog.so",
+            "-l", "libm.so",
+            "-l", "libc.so",
+            "-C", "link-arg=--allow-shlib-undefined"
           ]
 
           [workspace]
@@ -126,7 +137,7 @@ jobs:
       - name: Prepare 64bit-only build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Execute 64bit-only build script（一键编译，修正参数格式）
+      - name: Execute 64bit-only build script（一键编译，完整参数）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
