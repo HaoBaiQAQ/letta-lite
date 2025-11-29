@@ -12,10 +12,6 @@ jobs:
       TARGET_ARCH: aarch64-linux-android
       ANDROID_API_LEVEL: 24
       ARTIFACT_NAME: letta-lite-android-tianji1200
-      RUST_VERSION: 1.91.1
-      RUST_TARGET: aarch64-linux-android
-      RUST_TOOLCHAIN_DIR: /home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu
-      RUST_STD_DIR: ${{ github.workspace }}/rust-std
 
     steps:
       - name: Checkout source code (with llama.cpp submodule)
@@ -39,7 +35,7 @@ jobs:
           accept-android-sdk-licenses: true
           packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
 
-      - name: 终极解决 libunwind（用静态库 libunwind.a + 传递路径）
+      - name: 解决 libunwind（之前的有效配置）
         run: |
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
@@ -56,7 +52,7 @@ jobs:
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
-      - name: Compile OpenSSL for Android (android-arm64)
+      - name: Compile OpenSSL（之前的有效配置）
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
@@ -81,70 +77,37 @@ jobs:
           cd $TEMP_DIR
           ar -x "$LIB_SSL" $(ar -t "$LIB_SSL" | head -n 1)
           O_FILE=$(ls -1 | head -n 1)
-          echo -e "\n🔍 验证 .o 文件架构（readelf 检测）："
           readelf -h "$O_FILE" | grep -E "Class|Machine"
-          
           MACHINE=$(readelf -h "$O_FILE" | grep "Machine" | awk '{print $2}')
           if [ "$MACHINE" = "183" ] || [ "$MACHINE" = "AArch64" ]; then
-            echo -e "${GREEN}✅ OpenSSL 架构正确（aarch64/AArch64）${NC}"
+            echo -e "${GREEN}✅ OpenSSL 架构正确${NC}"
           else
-            echo -e "${RED}❌ OpenSSL 架构错误！当前 Machine 类型：$MACHINE${NC}"
+            echo -e "${RED}❌ OpenSSL 架构错误${NC}"
             exit 1
           fi
           cd - && rm -rf $TEMP_DIR
 
-      - name: 修正版：手动下载+精准解压 rust-std（必过）
+      - name: Configure Rust（仅修复命令错误，其他不变）
         run: |
-          # 1. 彻底清理旧文件，避免干扰
-          rm -rf ${{ env.RUST_TOOLCHAIN_DIR }}/lib/rustlib/${{ env.RUST_TARGET }} 2>/dev/null || true
-          rustup toolchain uninstall stable 2>/dev/null || true
-          # 2. 重新安装基础工具链
-          rustup toolchain install stable --version ${{ env.RUST_VERSION }}
-          # 3. 手动下载官方 rust-std 包（路径100%正确）
-          mkdir -p ${{ env.RUST_STD_DIR }}
-          RUST_STD_URL="https://static.rust-lang.org/dist/${{ env.RUST_VERSION }}/rust-std-${{ env.RUST_TARGET }}.tar.gz"
-          echo "✅ 下载 rust-std：$RUST_STD_URL"
-          wget -q -O ${{ env.RUST_STD_DIR }}/rust-std.tar.gz $RUST_STD_URL
-          # 4. 查看tar包内部结构，确保解压路径正确（关键修正）
-          echo -e "\n🔍 查看 tar 包内部结构："
-          tar -tvzf ${{ env.RUST_STD_DIR }}/rust-std.tar.gz | head -n 10
-          # 5. 精准解压：只切1层目录，直接放到 rustlib 下（之前切多了！）
-          RUSTLIB_TARGET_DIR="${{ env.RUST_TOOLCHAIN_DIR }}/lib/rustlib/${{ env.RUST_TARGET }}"
-          mkdir -p $RUSTLIB_TARGET_DIR
-          tar -xvzf ${{ env.RUST_STD_DIR }}/rust-std.tar.gz -C $RUSTLIB_TARGET_DIR --strip-components=1
-          # 6. 验证 core 库（必存在！）
-          CORE_LIB_PATH="$RUSTLIB_TARGET_DIR/lib/libcore.rlib"
-          if [ ! -f "$CORE_LIB_PATH" ]; then
-            echo -e "${RED}❌ 异常：core 库未找到！${NC}"
-            echo -e "📂 打印目标目录内容："
-            ls -l $RUSTLIB_TARGET_DIR/lib/
-            exit 1
-          else
-            echo -e "${GREEN}✅ 成功！core 库已存在：$CORE_LIB_PATH${NC}"
-            ls -l "$CORE_LIB_PATH"  # 显示文件详情，确认有效
-          fi
-          # 7. 保存关键路径到环境变量
-          echo "RUST_SYSROOT=${{ env.RUST_TOOLCHAIN_DIR }}" >> $GITHUB_ENV
-          echo "CORE_LIB_PATH=$CORE_LIB_PATH" >> $GITHUB_ENV
-          echo "CORE_LIB_DIR=$(dirname $CORE_LIB_PATH)" >> $GITHUB_ENV
+          rustup toolchain install stable  # 删掉瞎加的 --version，恢复原有效命令
+          rustup target add ${{ env.TARGET_ARCH }}
+          rustup target list | grep "${{ env.TARGET_ARCH }}"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      - name: Set up Gradle 7.5
+      - name: Set up Gradle 7.5（之前的有效配置）
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 7.5
 
-      - name: Create Cargo config（精准路径配置）
+      - name: Create Cargo config（之前的有效配置，不修改）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
-          [target.${{ env.RUST_TARGET }}]
+          [target.aarch64-linux-android]
           rustflags = [
-              "--sysroot=${{ env.RUST_SYSROOT }}",  # Rust 标准库根目录
-              "--sysroot=${{ env.NDK_SYSROOT }}",  # NDK 系统库根目录
-              "-L", "${{ env.CORE_LIB_DIR }}",     # core 库所在目录（精准指向）
+              "--sysroot=${{ env.NDK_SYSROOT }}",
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
@@ -160,7 +123,7 @@ jobs:
       - name: Prepare build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Run build script（一路畅通）
+      - name: Run build script（之前的有效脚本，不修改）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
@@ -169,9 +132,6 @@ jobs:
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
-          export RUST_SYSROOT=${{ env.RUST_SYSROOT }}
-          export CORE_LIB_PATH=${{ env.CORE_LIB_PATH }}
-          export CORE_LIB_DIR=${{ env.CORE_LIB_DIR }}
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
       - name: Collect artifacts
