@@ -1,9 +1,25 @@
-plugins {
-    id 'com.android.library'
-    id 'org.jetbrains.kotlin.android'
-    id 'maven-publish'
+// 🔧 新增1：配置插件仓库和依赖（旧版 Gradle 必需，原作者肯定有这段）
+buildscript {
+    repositories {
+        google()  // 安卓插件必须从 Google 仓库下载
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        // 明确安卓插件和 Kotlin 插件版本（和你原有依赖版本对齐）
+        classpath 'com.android.tools.build:gradle:7.4.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20"
+    }
 }
 
+// 🔧 修改2：给插件加版本号（旧版 Gradle 必须带 version，否则找不到）
+plugins {
+    id 'com.android.library' version '7.4.2'
+    id 'org.jetbrains.kotlin.android' version '1.9.20'
+    id 'maven-publish' version '7.4.2'
+}
+
+// 你的原有配置（完全不变，保留所有内容）
 android {
     namespace 'ai.letta.lite'
     compileSdk 34
