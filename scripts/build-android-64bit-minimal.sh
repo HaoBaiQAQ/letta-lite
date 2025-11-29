@@ -97,8 +97,8 @@ echo -e "  - Rust 标准库路径：$RUST_STD_PATH"
 echo -e "  - 系统库路径：$SYS_LIB_COPY_PATH"
 echo -e "  - NDK SYSROOT：$NDK_SYSROOT"
 
-# 🔧 核心修复：库引用格式改为 "-l:libxxx"（冒号分隔），避免编译器自动加前缀
-export RUSTFLAGS="--sysroot=$NDK_SYSROOT -L $RUST_STD_PATH -L $SYS_LIB_COPY_PATH -L $UNWIND_LIB_COPY_PATH -L $OPENSSL_LIB_DIR -l:libunwind.a -l:libdl.so -l:liblog.so -l:libm.so -l:libc.so -C link-arg=--allow-shlib-undefined -C linker=$NDK_TOOLCHAIN_BIN/ld.lld"
+# 🔧 终极终极修复：改用简化库名格式（-lxxx），无引号无冒号，shell 解析无歧义
+export RUSTFLAGS="--sysroot=$NDK_SYSROOT -L $RUST_STD_PATH -L $SYS_LIB_COPY_PATH -L $UNWIND_LIB_COPY_PATH -L $OPENSSL_LIB_DIR -lunwind -ldl -llog -lm -lc -C link-arg=--allow-shlib-undefined -C linker=$NDK_TOOLCHAIN_BIN/ld.lld"
 
 # 重新拉取依赖（关联标准库路径）
 echo -e "\n${YELLOW}=== 重新拉取所有项目依赖 ===${NC}"
@@ -140,7 +140,7 @@ JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
     "bindings/android/src/main/jni/letta_jni.c" \
     -L"${JNI_DIR}" -lletta_ffi \
     -L"${SYS_LIB_COPY_PATH}" -ldl -llog -lm -lc \
-    -L"${UNWIND_LIB_COPY_PATH}" -l:libunwind.a \
+    -L"${UNWIND_LIB_COPY_PATH}" -lunwind \
     -L"${OPENSSL_LIB_DIR}" -lssl -lcrypto -O2
 [ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功${NC}"
@@ -160,7 +160,7 @@ cp "$AAR_PATH" "${PWD}/release/"
 cp "$HEADER_FILE" "${PWD}/release/"
 cp "${PWD}/build.log" "${PWD}/release/"
 
-echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（终极稳定版）${NC}"
+echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（终极终极稳定版）${NC}"
 echo -e "${GREEN}📦 产物清单（release 目录）：${NC}"
 echo -e "  1. libletta_ffi.so（核心库）"
 echo -e "  2. libletta_jni.so（JNI 库）"
