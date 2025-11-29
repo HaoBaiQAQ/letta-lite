@@ -52,19 +52,31 @@ jobs:
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
+      # 🔧 核心修复：OpenSSL 编译适配 NDK 27（添加交叉编译前缀，识别 clang）
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}${{ env.ANDROID_API_LEVEL }}-clang"
+          # 明确交叉编译工具前缀+编译器路径，适配 NDK 27 无 gcc 的情况
+          export CROSS_COMPILE="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-"
+          export CC="${CROSS_COMPILE}${{ env.ANDROID_API_LEVEL }}-clang"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
+          # 添加 --cross-compile-prefix 参数，告诉 OpenSSL 交叉编译工具前缀
           ./Configure android-arm64 no-shared no-asm no-zlib \
-            --prefix=${{ env.OPENSSL_INSTALL_DIR }} --sysroot=${{ env.NDK_SYSROOT }} -fPIC
-          make -j$(nproc) V=1 && make install_sw
+            --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
+            --sysroot=${{ env.NDK_SYSROOT }} \
+            --cross-compile-prefix=$CROSS_COMPILE \
+            -fPIC -march=armv8-a
+          make -j$(nproc) V=1  # 保留 verbose 输出，方便排查
+          make install_sw
           echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
+          # 验证 OpenSSL 架构（确保是 aarch64）
+          file "${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a" | grep -qE "aarch64|64-bit ARM" && echo "✅ OpenSSL 架构正确" || { echo "❌ OpenSSL 架构错误"; exit 1; }
 
       - name: Configure Rust environment
         uses: dtolnay/rust-toolchain@stable
@@ -94,7 +106,6 @@ jobs:
           ]
           EOF
 
-      # 🔧 修复 YAML 语法：RUSTFLAGS 改成单行字符串，去掉换行和反斜杠
       - name: 全局注入库路径（关键！确保依赖库能找到）
         run: echo "RUSTFLAGS=--sysroot=${{ env.NDK_SYSROOT }} -L ${{ env.NDK_SYSROOT }}/usr/lib/${{ env.TARGET_ARCH }}/${{ env.ANDROID_API_LEVEL }} -L ${{ env.UNWIND_LIB_PATH }} -L ${{ env.OPENSSL_INSTALL_DIR }}/lib -l:libunwind.a -l:libdl.so -l:liblog.so -l:libm.so -l:libc.so -C link-arg=--allow-shlib-undefined" >> $GITHUB_ENV
 
