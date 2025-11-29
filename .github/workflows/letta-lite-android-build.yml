@@ -52,31 +52,43 @@ jobs:
           echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
           echo "✅ 找到 libunwind.a：$UNWIND_LIB_FILE"
 
-      # 🔧 核心修复：OpenSSL 编译适配 NDK 27（添加交叉编译前缀，识别 clang）
+      # 🔧 核心修复：强制指定 aarch64 架构，确保 OpenSSL 编译成目标架构
       - name: Compile OpenSSL for Android (android-arm64)
         run: |
           mkdir -p ${{ env.OPENSSL_SRC_DIR }} ${{ env.OPENSSL_INSTALL_DIR }}
           cd ${{ env.OPENSSL_SRC_DIR }}
           wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
           tar -xvzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz --strip-components=1
-          # 明确交叉编译工具前缀+编译器路径，适配 NDK 27 无 gcc 的情况
+          # 1. 明确交叉编译工具前缀（必须包含目标架构）
           export CROSS_COMPILE="${{ env.NDK_TOOLCHAIN_BIN }}/${{ env.TARGET_ARCH }}-"
+          # 2. 强制指定编译器为 aarch64 版本的 clang（带 API 级别）
           export CC="${CROSS_COMPILE}${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${CROSS_COMPILE}${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
           export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
-          # 添加 --cross-compile-prefix 参数，告诉 OpenSSL 交叉编译工具前缀
+          # 3. 关键：添加 -march=armv8-a 强制 aarch64 架构，禁用主机架构检测
           ./Configure android-arm64 no-shared no-asm no-zlib \
             --prefix=${{ env.OPENSSL_INSTALL_DIR }} \
             --sysroot=${{ env.NDK_SYSROOT }} \
             --cross-compile-prefix=$CROSS_COMPILE \
-            -fPIC -march=armv8-a
-          make -j$(nproc) V=1  # 保留 verbose 输出，方便排查
+            -fPIC -march=armv8-a -mtune=cortex-a76  # mtune 适配天玑1200的 cortex-a76 核心
+          # 4. 编译时显示架构相关日志，方便排查
+          make -j$(nproc) V=1 | grep -E "CC|AR|LD|arch|aarch64" || true
           make install_sw
           echo "✅ OpenSSL 编译完成：${{ env.OPENSSL_INSTALL_DIR }}/lib"
-          # 验证 OpenSSL 架构（确保是 aarch64）
-          file "${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a" | grep -qE "aarch64|64-bit ARM" && echo "✅ OpenSSL 架构正确" || { echo "❌ OpenSSL 架构错误"; exit 1; }
+          # 5. 验证架构（若失败，输出详细信息帮助排查）
+          LIB_SSL="${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a"
+          echo -e "\n🔍 验证 libssl.a 架构："
+          file "$LIB_SSL"
+          if file "$LIB_SSL" | grep -qE "aarch64|64-bit ARM|ARM aarch64"; then
+            echo -e "${GREEN}✅ OpenSSL 架构正确（aarch64）${NC}"
+          else
+            echo -e "${RED}❌ OpenSSL 架构错误！当前架构：$(file "$LIB_SSL")${NC}"
+            echo -e "🔍 排查提示：检查 CC 变量是否为 ${CROSS_COMPILE}${{ env.ANDROID_API_LEVEL }}-clang"
+            exit 1
+          fi
 
       - name: Configure Rust environment
         uses: dtolnay/rust-toolchain@stable
