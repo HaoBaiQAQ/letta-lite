@@ -89,55 +89,46 @@ jobs:
           fi
           cd - && rm -rf $TEMP_DIR
 
-      - name: Configure Rust environment
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          target: ${{ env.TARGET_ARCH }}
-
-      # 🔧 关键修复：验证+强制指定 Rust 工具链路径（让 rustc 找到 core 库）
-      - name: Verify Rust target installation + fix path
+      - name: Configure Rust environment + 强制安装目标架构
         run: |
-          # 1. 再次强制安装（确保覆盖缓存）
+          # 彻底清理缓存，重新安装
+          rustup toolchain uninstall stable 2>/dev/null || true
+          rustup toolchain install stable
           rustup target uninstall ${{ env.TARGET_ARCH }} 2>/dev/null || true
           rustup target install ${{ env.TARGET_ARCH }} --toolchain stable
-          # 2. 打印 Rust 工具链根目录（验证路径）
+          # 拿到 Rust 工具链根目录，硬编码到环境变量
           RUST_SYSROOT=$(rustc --print sysroot)
+          CORE_LIB_PATH="$RUST_SYSROOT/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
           echo "RUST_SYSROOT=$RUST_SYSROOT" >> $GITHUB_ENV
-          echo "✅ Rust 工具链根目录：$RUST_SYSROOT"
-          # 3. 验证 core 库是否存在（直接检查文件）
-          CORE_LIB_PATH="$RUST_SYSROOT/lib/rustlib/${{ env.TARGET_ARCH }}/lib/libcore.rlib"
-          if [ -f "$CORE_LIB_PATH" ]; then
-            echo "✅ 找到 core 库：$CORE_LIB_PATH"
-          else
-            echo -e "${RED}❌ 未找到 core 库！路径：$CORE_LIB_PATH${NC}"
+          echo "CORE_LIB_PATH=$CORE_LIB_PATH" >> $GITHUB_ENV
+          # 验证 core 库存在（不存在直接报错，不浪费时间）
+          if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
+            echo -e "${RED}❌ 致命错误：core 库未安装！路径：$CORE_LIB_PATH${NC}"
             exit 1
+          else
+            echo -e "${GREEN}✅ 确认 core 库存在：$CORE_LIB_PATH/libcore.rlib${NC}"
           fi
-          # 4. 显式告诉 Cargo 工具链路径（避免识别失败）
-          echo "CARGO_TARGET_DIR=$RUST_SYSROOT/lib/rustlib" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version=3.5.4 --locked
 
-      # 🔧 强制 CI 用 Gradle 7.5
       - name: Set up Gradle 7.5
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 7.5
 
-      # 🔧 必要配置：.cargo/config.toml（添加 Rust 工具链路径）
-      - name: Create Cargo config
+      - name: Create Cargo config（极简，只留必要路径）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
           [target.aarch64-linux-android]
           rustflags = [
               "--sysroot=${{ env.NDK_SYSROOT }}",
-              "--sysroot=${{ env.RUST_SYSROOT }}",  # 显式指定 Rust 标准库路径
+              "--sysroot=${{ env.RUST_SYSROOT }}",  # 强制 Rust 标准库路径
+              "-L", "${{ env.CORE_LIB_PATH }}",     # 直接指向 core 库目录
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/24",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
               "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
-              "-L", "${{ env.RUST_SYSROOT }}/lib/rustlib/${{ env.TARGET_ARCH }}/lib",  # 直接指向 core 库所在目录
               "-l", "static=unwind",
               "-l", "dylib=dl",
               "-l", "dylib=log",
@@ -150,7 +141,7 @@ jobs:
       - name: Prepare build script
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: Run build script
+      - name: Run build script（强制传递 RUSTFLAGS）
         run: |
           export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export NDK_PATH=${{ env.NDK_PATH }}
@@ -159,7 +150,8 @@ jobs:
           export UNWIND_LIB_PATH=${{ env.UNWIND_LIB_PATH }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
-          export RUST_SYSROOT=${{ env.RUST_SYSROOT }}  # 传递给脚本
+          export RUST_SYSROOT=${{ env.RUST_SYSROOT }}
+          export CORE_LIB_PATH=${{ env.CORE_LIB_PATH }}
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
 
       - name: Collect artifacts
