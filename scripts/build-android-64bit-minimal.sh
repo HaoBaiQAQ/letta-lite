@@ -44,19 +44,8 @@ echo -e "  - 项目内libunwind路径：${UNWIND_LIB_COPY_PATH}"
 echo -e "  - OpenSSL 路径：${OPENSSL_LIB_DIR}"
 echo -e "  - 链接器：${NDK_TOOLCHAIN_BIN}/ld.lld"
 
-# 强制指定 RUSTFLAGS（修正中文冒号→英文冒号，双重保障）
-export RUSTFLAGS="\
---sysroot=${NDK_SYSROOT} \
--L ${SYS_LIB_COPY_PATH} \
--L ${UNWIND_LIB_COPY_PATH} \
--L ${OPENSSL_LIB_DIR} \
--l:libunwind.a \
--l:libdl.so \
--l:liblog.so \
--l:libm.so \
--l:libc.so \
--C link-arg=--allow-shlib-undefined \
--C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
+# 最终修正：去掉反斜杠/引号，用空格分隔参数，只在编译时传递-l参数
+export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${SYS_LIB_COPY_PATH} -L ${UNWIND_LIB_COPY_PATH} -L ${OPENSSL_LIB_DIR} -l libunwind.a -l libdl.so -l liblog.so -l libm.so -l libc.so -C link-arg=--allow-shlib-undefined -C linker=${NDK_TOOLCHAIN_BIN}/ld.lld"
 
 # 安装目标平台标准库
 echo -e "\n${YELLOW}=== 安装目标平台标准库 ===${NC}"
@@ -68,7 +57,7 @@ export CC_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEV
 export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
-# 编译核心库（带 --verbose 查看参数传递，确保项目内库路径生效）
+# 编译核心库（带 --verbose 查看参数传递）
 echo -e "\n${YELLOW}=== 编译核心库（letta-ffi） ===${NC}"
 cargo build --workspace --target=${TARGET} --profile mobile --verbose -p letta-ffi
 # 手动复制产物到 JNI 目录
@@ -87,7 +76,7 @@ mkdir -p ffi/include && cp "$HEADER_FILE" ffi/include/
 cp "$HEADER_FILE" bindings/android/src/main/jni/
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（完整步骤，修正中文冒号）
+# 编译 JNI 库（完整步骤）
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
 "${CC_aarch64_linux_android}" \
@@ -99,7 +88,7 @@ JNI_DIR="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a"
     "bindings/android/src/main/jni/letta_jni.c" \
     -L"${JNI_DIR}" -lletta_ffi \
     -L"${SYS_LIB_COPY_PATH}" -ldl -llog -lm -lc \
-    -L"${UNWIND_LIB_COPY_PATH}" -l:libunwind.a \  # 英文冒号
+    -L"${UNWIND_LIB_COPY_PATH}" -l libunwind.a \
     -L"${OPENSSL_LIB_DIR}" -lssl -lcrypto -O2
 [ ! -f "${JNI_DIR}/libletta_jni.so" ] && { echo -e "${RED}Error: JNI 库编译失败${NC}"; exit 1; }
 echo -e "${GREEN}✅ JNI 库生成成功${NC}"
@@ -119,7 +108,7 @@ cp "${AAR_PATH}" "${PWD}/release/"
 cp "${HEADER_FILE}" "${PWD}/release/"
 cp "${PWD}/build.log" "${PWD}/release/"
 
-echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（修正中文冒号）${NC}"
+echo -e "\n${GREEN}🎉 所有产物生成成功！适配天玑1200+NDK 27（最终修正版）${NC}"
 echo -e "${GREEN}📦 产物清单（release 目录）：${NC}"
 echo -e "  1. libletta_ffi.so（核心库）"
 echo -e "  2. libletta_jni.so（JNI 库）"
