@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config binutils \
-            gcc g++  # 补充OpenSSL编译必需依赖
+            gcc g++
           java -version
           gradle -v
 
@@ -103,7 +103,7 @@ jobs:
         with:
           gradle-version: 7.5
 
-      - name: 创建Cargo配置（正确链接OpenSSL+NDK库）
+      - name: 创建Cargo配置（添加 libc 适配 + 正确链接）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -112,16 +112,20 @@ jobs:
               "--sysroot=${{ env.NDK_SYSROOT }}",
               "-L", "${{ env.NDK_SYSROOT }}/usr/lib/aarch64-linux-android/${{ env.ANDROID_API_LEVEL }}",
               "-L", "${{ env.UNWIND_LIB_PATH }}",
-              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",  # 链接OpenSSL静态库
+              "-L", "${{ env.OPENSSL_INSTALL_DIR }}/lib",
               "-l", "static=unwind",
-              "-l", "static=ssl",  # 静态链接OpenSSL ssl库
-              "-l", "static=crypto",  # 静态链接OpenSSL crypto库
+              "-l", "static=ssl",
+              "-l", "static=crypto",
               "-l", "dylib=dl",
               "-l", "dylib=log",
               "-l", "dylib=m",
               "-l", "dylib=c",
-              "-C", "link-arg=--allow-shlib-undefined"
+              "-C", "link-arg=--target=aarch64-linux-android24"  # 明确链接器目标
           ]
+          # 全局配置 libc 适配 Android，避免特性冲突
+          [dependencies.libc]
+          features = ["android"]
+          default-features = false
           EOF
 
       - name: 赋予脚本执行权限
