@@ -21,7 +21,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 工具检查
+# 工具检查（确保 cbindgen 已安装）
 check_command() {
     if ! command -v "$1" &> /dev/null; then
         echo -e "${RED}Error: 缺失工具 $1${NC}"
@@ -32,6 +32,7 @@ check_command rustup
 check_command cargo
 check_command cargo-ndk
 check_command clang
+check_command cbindgen  # 确保 cbindgen 工具可用
 
 # 验证 CI 环境变量路径
 echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
@@ -42,7 +43,7 @@ echo -e "\n${YELLOW}=== 验证 CI 环境变量路径 ===${NC}"
 [ ! -d "${OPENSSL_DIR}/lib" ] && { echo -e "${RED}Error: OpenSSL 库路径不存在${NC}"; exit 1; }
 echo -e "${GREEN}✅ 所有 CI 路径验证通过${NC}"
 
-# 🔧 核心修复：移除 clang 不识别的 --allow-shlib-undefined 参数
+# 核心 RUSTFLAGS（无无效参数）
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${RUST_STD_PATH} -L ${SYS_LIB_PATH} -L ${OPENSSL_DIR}/lib -L ${PROJECT_SYS_LIB_DIR}/sys $( [ -n "${UNWIND_LIB_PATH}" ] && echo "-L ${UNWIND_LIB_PATH}" ) -C panic=abort"
 
 # 交叉编译工具链配置
@@ -51,10 +52,10 @@ export AR_aarch64_linux_android="${NDK_TOOLCHAIN_BIN}/llvm-ar"
 export PKG_CONFIG_ALLOW_CROSS=1
 
 # 构建配置汇总
-echo -e "\n${YELLOW}=== 构建配置汇总（最终稳定版） ===${NC}"
+echo -e "\n${YELLOW}=== 构建配置汇总（最终最终稳定版） ===${NC}"
 echo -e "  目标平台：${TARGET}（仅 arm64-v8a）"
 echo -e "  Android API：${ANDROID_API_LEVEL}"
-echo -e "  编译模式：panic=abort（无无效链接参数）"
+echo -e "  编译模式：panic=abort + 命令行 cbindgen 生成头文件"
 
 # 验证目标平台标准库
 echo -e "\n${YELLOW}=== 验证目标平台标准库 ===${NC}"
@@ -64,8 +65,8 @@ if ! rustup target list | grep -q "${TARGET} (installed)"; then
 fi
 echo -e "${GREEN}✅ 目标平台标准库已就绪${NC}"
 
-# 编译核心库（最终稳定命令）
-echo -e "\n${YELLOW}=== 编译核心库（最终稳定版） ===${NC}"
+# 编译核心库
+echo -e "\n${YELLOW}=== 编译核心库 ===${NC}"
 cargo ndk --platform "${ANDROID_API_LEVEL}" -t arm64-v8a -o "${PWD}/bindings/android/src/main/jniLibs" build --profile mobile --verbose -p letta-ffi
 CORE_SO="${PWD}/bindings/android/src/main/jniLibs/arm64-v8a/libletta_ffi.so"
 if [ ! -f "${CORE_SO}" ]; then
@@ -74,19 +75,20 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成 C 头文件
-echo -e "\n${YELLOW}=== 生成 C 头文件 ===${NC}"
-cargo build --target="${TARGET}" --profile mobile --features cbindgen --verbose -p letta-ffi
+# 🔧 修复：直接用 cbindgen 命令行生成头文件（无需 crate feature）
+echo -e "\n${YELLOW}=== 生成 C 头文件（命令行模式） ===${NC}"
+mkdir -p ffi/include "${PWD}/bindings/android/src/main/jni"
+# 直接调用 cbindgen 工具，指定 crate、语言和输出路径
+cbindgen --crate letta-ffi --lang c --output ffi/include/letta_lite.h --verbose
 HEADER_FILE="ffi/include/letta_lite.h"
 if [ ! -f "${HEADER_FILE}" ]; then
+    echo -e "${YELLOW}⚠️  头文件生成失败，尝试搜索备用路径...${NC}"
     HEADER_FILE=$(find "${PWD}/target" -name "letta_lite.h" | grep -E "${TARGET}/mobile" | head -n 1)
+    [ -z "${HEADER_FILE}" ] && { echo -e "${RED}Error: 头文件生成失败${NC}"; exit 1; }
+    cp "${HEADER_FILE}" ffi/include/
 fi
-if [ -z "${HEADER_FILE}" ] || [ ! -f "${HEADER_FILE}" ]; then
-    echo -e "${RED}Error: 头文件生成失败${NC}"
-    exit 1
-fi
-mkdir -p ffi/include && cp "${HEADER_FILE}" ffi/include/
-cp "${HEADER_FILE}" bindings/android/src/main/jni/
+# 复制头文件到 JNI 目录
+cp "${HEADER_FILE}" "${PWD}/bindings/android/src/main/jni/"
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
 # 编译 JNI 库
