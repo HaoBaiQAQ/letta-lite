@@ -29,15 +29,12 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 🔧 核心修复：同步工作流逻辑，匹配带哈希后缀的核心库
+# 核心库验证（带哈希后缀）
 echo -e "\n${YELLOW}=== 验证 Rust 核心库 ===${NC}"
-# 从工作流传递的 CORE_LIB_PATH 环境变量（和工作流验证的路径一致）
 if [ -z "${CORE_LIB_PATH:-}" ]; then
   echo -e "${RED}❌ 核心库路径未传递！CORES_LIB_PATH 环境变量缺失${NC}"
   exit 1
 fi
-
-# 用通配符匹配带哈希后缀的核心库（libcore-*.rlib）
 CORE_LIB_FILE=$(ls -1 "${CORE_LIB_PATH}" 2>/dev/null | grep -E "^libcore-.*\.rlib$" | head -n 1)
 if [ -z "${CORE_LIB_FILE}" ]; then
   echo -e "${RED}❌ 核心库文件缺失！路径：${CORE_LIB_PATH}${NC}"
@@ -45,8 +42,6 @@ if [ -z "${CORE_LIB_FILE}" ]; then
   ls -l "${CORE_LIB_PATH}" 2>/dev/null || echo "目录为空"
   exit 1
 fi
-
-# 验证通过，打印核心库信息
 echo -e "${GREEN}✅ 核心库验证成功！${NC}"
 echo -e "核心库路径：${CORE_LIB_PATH}"
 echo -e "核心库文件：${CORE_LIB_FILE}"
@@ -61,7 +56,7 @@ include ":bindings:android"
 EOF
 echo -e "${GREEN}✅ settings.gradle 配置完成${NC}"
 
-# 验证项目完整性（红字报错）
+# 验证项目完整性
 echo -e "\n${YELLOW}=== 验证项目完整性 ===${NC}"
 if [ ! -f "${ANDROID_PROJECT_DIR}/build.gradle" ]; then
   echo -e "${RED}❌ Error: 缺失 build.gradle${NC}"
@@ -77,7 +72,7 @@ if [ ! -d "${ANDROID_PROJECT_DIR}/src/main/java" ]; then
 fi
 echo -e "${GREEN}✅ 项目文件完整${NC}"
 
-# 验证 CI 环境（红字报错）
+# 验证 CI 环境
 echo -e "\n${YELLOW}=== 验证 CI 环境 ===${NC}"
 if [ -z "${NDK_TOOLCHAIN_BIN:-}" ]; then
   echo -e "${RED}❌ Error: NDK_TOOLCHAIN_BIN 未提供${NC}"
@@ -93,19 +88,31 @@ if [ -z "${OPENSSL_INSTALL_DIR:-}" ] || [ ! -d "${OPENSSL_INSTALL_DIR}/lib" ]; t
 fi
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 编译 Rust 核心库（红字报错+详细日志）
+# 编译 Rust 核心库
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
-# 确保 RUSTFLAGS 包含核心库路径
-export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib -C link-arg=--target=aarch64-linux-android24 -L ${CORE_LIB_PATH}"
+export RUSTFLAGS="\
+  --sysroot=${NDK_SYSROOT} \
+  -L ${UNWIND_LIB_PATH} \
+  -L ${OPENSSL_INSTALL_DIR}/lib \
+  -I ${OPENSSL_INSTALL_DIR}/include \
+  -C link-arg=--target=aarch64-linux-android24 \
+  -L ${CORE_LIB_PATH} \
+  -C link-arg=-L${OPENSSL_INSTALL_DIR}/lib"
 
-# 执行编译，失败则输出详细错误
 if ! cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi \
     --config "dependencies.libc.features = [\"android\"]" \
-    --config "dependencies.libc.default-features = false"; then
+    --config "dependencies.libc.default-features = false" \
+    --config "dependencies.openssl-sys.build = { env = { OPENSSL_DIR = \"${OPENSSL_DIR:-${OPENSSL_INSTALL_DIR}}\" } }" \
+    --config "dependencies.openssl-sys.features = []" \
+    --config "dependencies.openssl-sys.default-features = false"; then
   echo -e "${RED}❌ Rust 核心库编译失败！${NC}"
-  tail -n 50 build.log
+  echo -e "${YELLOW}openssl-sys 配置信息：${NC}"
+  echo "OPENSSL_DIR: ${OPENSSL_DIR:-${OPENSSL_INSTALL_DIR}}"
+  echo "OpenSSL 库路径: ${OPENSSL_INSTALL_DIR}/lib"
+  echo "OpenSSL 头文件路径: ${OPENSSL_INSTALL_DIR}/include"
+  tail -n 100 build.log
   exit 1
 fi
 
@@ -116,7 +123,7 @@ if [ ! -f "${CORE_SO}" ]; then
 fi
 echo -e "${GREEN}✅ 核心库生成成功：${CORE_SO}${NC}"
 
-# 生成头文件（红字报错）
+# 生成头文件
 echo -e "\n${YELLOW}=== 生成 C 头文件 ===${NC}"
 if ! cbindgen --crate letta-ffi --lang c --output "${HEADER_DIR}/letta_lite.h"; then
   echo -e "${RED}❌ 头文件生成失败！${NC}"
@@ -129,7 +136,7 @@ if [ ! -f "${HEADER_FILE}" ]; then
 fi
 echo -e "${GREEN}✅ 头文件生成成功：${HEADER_FILE}${NC}"
 
-# 编译 JNI 库（红字报错）
+# 编译 JNI 库
 echo -e "\n${YELLOW}=== 编译 JNI 库 ===${NC}"
 JNI_COMPILER="${NDK_TOOLCHAIN_BIN}/${TARGET}${ANDROID_API_LEVEL:-24}-clang"
 if ! "${JNI_COMPILER}" \
@@ -158,35 +165,29 @@ if [ ! -f "${JNI_SO}" ]; then
 fi
 echo -e "${GREEN}✅ JNI 库生成成功：${JNI_SO}${NC}"
 
-# 打包 AAR（红字报错）
+# 🔧 核心修复：打包 AAR（跳过 gradlew 生成，直接用系统 Gradle）
 echo -e "\n${YELLOW}=== 打包 AAR ===${NC}"
 cd "${ANDROID_PROJECT_DIR}" || {
   echo -e "${RED}❌ 进入 Android 项目目录失败！${NC}"
   exit 1
 }
 
-if [ ! -f "gradlew" ]; then
-  echo -e "${YELLOW}生成 Gradle 7.5 兼容版 gradlew...${NC}"
-  if ! gradle wrapper --gradle-version 7.5 --distribution-type all; then
-    echo -e "${RED}❌ gradlew 生成失败！${NC}"
-    exit 1
-  fi
-  chmod +x gradlew
-fi
-
-if ! ./gradlew assembleRelease --no-daemon \
+# 直接使用系统 Gradle 7.5 打包，绕开 gradlew 生成（工作流已安装 Gradle 7.5）
+echo -e "${YELLOW}使用系统 Gradle 7.5 打包 AAR...${NC}"
+if ! gradle assembleRelease --no-daemon \
     -Dorg.gradle.jvmargs="-Xmx2g" \
     -Pandroid.compileSdkVersion=34 \
     -Pandroid.minSdkVersion=21 \
     -Pandroid.targetSdkVersion=34 \
-    -Pandroid.ndkPath="${NDK_PATH:-}"; then
-  echo -e "${RED}❌ AAR 打包失败！${NC}"
-  tail -n 50 ./build/logs/gradle.log 2>/dev/null
+    -Pandroid.ndkPath="${NDK_PATH:-}" \
+    -Pandroid.buildToolsVersion="34.0.0" ; then  # 新增：指定 buildToolsVersion，避免自动查找失败
+  echo -e "${RED}❌ AAR 打包失败！输出详细日志：${NC}"
+  gradle assembleRelease --no-daemon --stacktrace 2>&1 | tail -n 200
   exit 1
 fi
 cd ../..
 
-# 收集产物（完整收集）
+# 收集产物
 echo -e "\n${YELLOW}=== 收集产物 ===${NC}"
 AAR_PATH=$(find "${ANDROID_PROJECT_DIR}/build/outputs/aar" -name "*.aar" -path "*/release/*" | head -n 1)
 AAR_FINAL="${PROJECT_ROOT}/release/letta-lite-android.aar"
@@ -231,7 +232,7 @@ cp "${CORE_SO}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
 cp "${JNI_SO}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
 cp "${HEADER_FILE}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
 
-# 最终验证结果（红字报错）
+# 最终验证结果
 if [ ! -f "${AAR_FINAL}" ]; then
   echo -e "\n${RED}❌ 最终产物收集失败！未找到 AAR 文件${NC}"
   exit 1
