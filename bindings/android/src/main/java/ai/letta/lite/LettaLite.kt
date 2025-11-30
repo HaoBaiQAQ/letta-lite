@@ -136,7 +136,7 @@ class LettaLite(config: AgentConfig = AgentConfig()) : Closeable {
     }
     
     // Native methods
-    internal external fun nativeInitStorage(path: String): Int  // 已改：private → internal
+    public external fun nativeInitStorage(path: String): Int  // 最终修改：internal → public
     private external fun nativeCreateAgent(configJson: String): Long
     private external fun nativeFreeAgent(handle: Long)
     private external fun nativeLoadAF(handle: Long, json: String): Int
@@ -146,12 +146,11 @@ class LettaLite(config: AgentConfig = AgentConfig()) : Closeable {
     private external fun nativeAppendArchival(handle: Long, folder: String, text: String): Int
     private external fun nativeSearchArchival(handle: Long, query: String, topK: Int): String?
     private external fun nativeConverse(handle: Long, messageJson: String): String?
-    internal external fun nativeConfigureSync(configJson: String): Int  // 已改：private → internal
+    public external fun nativeConfigureSync(configJson: String): Int  // 最终修改：internal → public
     private external fun nativeSyncWithCloud(handle: Long): Int
 }
 
 // Data classes
-
 data class AgentConfig(
     val name: String = "assistant",
     @SerializedName("system_prompt")
