@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config binutils \
-            gcc g++
+            gcc g++ tree  # 新增 tree 工具，用于打印目录结构
           java -version
           gradle -v
 
@@ -72,7 +72,7 @@ jobs:
 
           make -j$(nproc) > /dev/null 2>&1 || {
             echo -e "${RED}❌ OpenSSL编译失败！查看编译日志：${NC}"
-            make -j1 V=1  # 重新执行单线程编译，输出详细错误
+            make -j1 V=1
             exit 1
           }
           make install_sw > /dev/null 2>&1 || {
@@ -86,31 +86,54 @@ jobs:
           fi
           echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      # 🔧 关键修复1：彻底去掉所有无效--force，优化核心库验证
-      - name: 配置Rust（彻底修复--force参数，确保核心库存在）
+      # 🔧 核心修改：安装后强制打印目录，可视化验证核心库
+      - name: 配置Rust（安装后打印目录，确保核心库存在）
         run: |
-          rustup toolchain install stable --force  # 仅toolchain install支持--force，保留
-          rustup target add ${{ env.TARGET_ARCH }}  # 去掉--force（正确命令）
-          
-          # 验证目标架构是否安装成功
-          if ! rustup target list | grep "${{ env.TARGET_ARCH }}" | grep -q "installed"; then
-            echo -e "${RED}❌ Rust目标架构 ${{ env.TARGET_ARCH }} 安装失败！${NC}"
+          # 1. 彻底清理旧缓存，避免干扰
+          rustup toolchain uninstall stable -y || true
+          rustup target remove ${{ env.TARGET_ARCH }} -y || true
+          rustup component remove rust-std-${{ env.TARGET_ARCH }} -y || true
+
+          # 2. 重新安装 stable 工具链
+          echo -e "${YELLOW}正在安装 Rust stable 工具链...${NC}"
+          rustup toolchain install stable --force
+          echo -e "${GREEN}✅ Rust stable 工具链安装完成${NC}"
+
+          # 3. 重新安装目标架构
+          echo -e "${YELLOW}正在安装 ${{ env.TARGET_ARCH }} 目标架构...${NC}"
+          rustup target add ${{ env.TARGET_ARCH }} --verbose
+          echo -e "${GREEN}✅ 目标架构安装完成${NC}"
+
+          # 4. 手动指定核心库路径（和之前一致，验证路径是否存在）
+          CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
+          echo -e "\n${YELLOW}=== 开始打印核心库目录验证 ===${NC}"
+          echo -e "核心库目录路径：${CORE_LIB_PATH}"
+
+          # 5. 打印目录是否存在
+          if [ -d "$CORE_LIB_PATH" ]; then
+            echo -e "${GREEN}✅ 核心库目录存在${NC}"
+          else
+            echo -e "${RED}❌ 核心库目录不存在！${NC}"
             exit 1
           fi
-          
-          # 验证核心库（core）是否存在，优化路径判断避免误判
-          CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
-          if [ ! -d "$CORE_LIB_PATH" ] || [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
-            echo -e "${RED}❌ 找不到核心库（core）！路径：$CORE_LIB_PATH${NC}"
-            echo -e "${YELLOW}尝试重新安装Rust标准库...${NC}"
-            rustup component add rust-std-${{ env.TARGET_ARCH }}  # 去掉--force（关键修复！之前误加）
-            # 再次验证，确保核心库存在
-            if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
-              echo -e "${RED}❌ 核心库安装失败！无法继续编译${NC}"
-              exit 1
-            fi
+
+          # 6. 打印目录下所有文件（关键！可视化看是否有 libcore.rlib）
+          echo -e "\n${YELLOW}核心库目录下的所有文件：${NC}"
+          ls -l "$CORE_LIB_PATH"  # 打印完整文件列表
+          echo -e "\n${YELLOW}过滤核心库相关文件（libcore*.rlib）：${NC}"
+          ls -l "$CORE_LIB_PATH" | grep -E "libcore|libstd"  # 只显示核心库和标准库文件
+
+          # 7. 打印目录结构（备用，防止文件藏在子目录）
+          echo -e "\n${YELLOW}核心库目录完整结构：${NC}"
+          tree "$CORE_LIB_PATH" 2>/dev/null || echo "tree 工具未安装，跳过目录结构打印"
+
+          # 8. 最终验证 libcore.rlib 是否存在
+          if [ -f "$CORE_LIB_PATH/libcore.rlib" ]; then
+            echo -e "\n${GREEN}🎉 核心库验证成功！已找到 $CORE_LIB_PATH/libcore.rlib${NC}"
+          else
+            echo -e "\n${RED}❌ 核心库缺失！目录下没有 libcore.rlib${NC}"
+            exit 1
           fi
-          echo -e "${GREEN}✅ Rust目标架构和核心库验证成功${NC}"
 
       - name: 安装cargo-ndk（固定版本）
         run: |
@@ -162,7 +185,6 @@ jobs:
           export OPENSSL_INSTALL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
-          # 传递核心库路径，避免脚本里找不到
           export CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
           
           ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log || {
@@ -170,52 +192,26 @@ jobs:
             exit 1
           }
 
-      # 🔧 关键修复2：AAR缺失直接红字报错退出，不打钩（核心需求）
-      - name: 收集产物（AAR缺失强报错，不隐瞒失败）
+      - name: 收集产物（AAR缺失强报错）
         if: always()
         run: |
           mkdir -p ./release
-          
-          # 收集编译日志（必须保留，方便排查）
           if [ -f "build.log" ]; then
             cp build.log ./release/
-            echo -e "${GREEN}✅ 编译日志收集成功${NC}"
-          else
-            echo -e "${RED}❌ 未找到编译日志 build.log（编译过程异常）${NC}"
           fi
-          
-          # 收集Rust中间产物（方便排查依赖错误）
-          if [ -d "target/aarch64-linux-android/release/deps" ]; then
-            mkdir -p ./release/rust-deps
-            cp target/aarch64-linux-android/release/deps/*.rlib ./release/rust-deps/ 2>/dev/null
-            cp target/aarch64-linux-android/release/deps/*.so ./release/rust-deps/ 2>/dev/null
-            echo -e "${GREEN}✅ Rust中间产物收集成功${NC}"
-          fi
-          
-          # 核心逻辑：AAR缺失直接报错退出，工作流显示失败（不打钩）
           AAR_PATH=$(find ${{ github.workspace }} -name "*.aar" -path "*/release/*" | head -n 1)
           if [ -n "$AAR_PATH" ]; then
             cp "$AAR_PATH" ./release/letta-lite-android.aar
-            echo -e "${GREEN}✅ AAR产物收集成功：$AAR_PATH${NC}"
+            echo -e "${GREEN}✅ AAR产物收集成功${NC}"
           else
-            echo -e "${RED}❌ 严重错误：未找到AAR产物（编译失败）${NC}"
-            exit 1  # 强制退出，工作流标记失败，不显示打钩
+            echo -e "${RED}❌ 未找到AAR产物（编译失败）${NC}"
+            exit 1
           fi
-          
-          # 收集SO库（备用，即使打包进AAR也保留）
-          FFI_SO=$(find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" | head -n 1)
-          JNI_SO=$(find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" | head -n 1)
-          if [ -n "$FFI_SO" ] && [ -n "$JNI_SO" ]; then
-            cp "$FFI_SO" ./release/
-            cp "$JNI_SO" ./release/
-            echo -e "${GREEN}✅ SO库收集成功${NC}"
-          else
-            echo -e "${YELLOW}⚠️  警告：SO库未单独找到（可能已打包进AAR，不影响使用）${NC}"
-          fi
+          find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" -exec cp {} ./release/ \;
+          find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" -exec cp {} ./release/ \;
 
-      # 🔧 关键修复3：仅AAR成功生成才上传产物，避免上传空文件夹
-      - name: 上传产物（仅成功生成AAR才上传）
-        if: success()  # 只有前面步骤无错误（AAR存在）才上传
+      - name: 上传产物（仅成功时上传）
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
