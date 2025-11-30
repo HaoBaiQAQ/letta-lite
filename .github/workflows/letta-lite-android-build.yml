@@ -244,14 +244,14 @@ jobs:
           path: ./release/*
           retention-days: 14
 
-      # 🔧 自动创建GitHub Release（核心修改：主分支+标签都触发，自动区分版本）
+      # 🔧 自动创建GitHub Release（修复缩进错误，统一2空格缩进）
       - name: 自动创建GitHub Release并上传产物
         if: success() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
           # 动态版本号：标签触发用标签名，主分支触发用「v-dev-提交SHA前8位」
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v-dev-{0}', github.sha[:8]) }}
-          # 动态名称：区分正式版和开发版
+          # 动态名称：区分正式版和开发版（修复缩进+格式错误）
           name: ${{ startsWith(github.ref, 'refs/tags/v') ? format('Letta-Lite Android 正式版 {0}', github.ref_name) : format('Letta-Lite Android 开发版（{0}）', github.sha[:8]) }}
           # 动态描述：包含版本类型、提交信息、产物说明
           body: |
