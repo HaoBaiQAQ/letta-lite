@@ -2,8 +2,8 @@ name: Letta-Lite Android (Tianji1200 + OpenSSL)
 on: 
   workflow_dispatch:  # 手动触发时也释放
   push:
-    branches: [main]  # 主分支推送时触发工作流释放
-    tags: ['v*']     # 推送 v0.1.0 这类tag时，额外触发Git Releases释放
+    branches: [main]  # 主分支推送（改源码）自动触发：编译+创建开发版Release
+    tags: ['v*']     # 标签推送（v0.1.0）自动触发：编译+创建正式版Release
   pull_request:
 
 jobs:
@@ -244,24 +244,37 @@ jobs:
           path: ./release/*
           retention-days: 14
 
-      # 🔧 Git Releases释放：推送tag时自动创建Release（在Git页面下载）
+      # 🔧 自动创建GitHub Release（核心修改：主分支+标签都触发，自动区分版本）
       - name: 自动创建GitHub Release并上传产物
-        if: success() && startsWith(github.ref, 'refs/tags/v')  # 仅推送v*标签时触发
+        if: success() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
-          name: Letta-Lite Android v${{ github.ref_name }}  # Release名称（含版本号）
+          # 动态版本号：标签触发用标签名，主分支触发用「v-dev-提交SHA前8位」
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v-dev-{0}', github.sha[:8]) }}
+          # 动态名称：区分正式版和开发版
+          name: ${{ startsWith(github.ref, 'refs/tags/v') ? format('Letta-Lite Android 正式版 {0}', github.ref_name) : format('Letta-Lite Android 开发版（{0}）', github.sha[:8]) }}
+          # 动态描述：包含版本类型、提交信息、产物说明
           body: |
-            ## 产物信息
+            ${{ startsWith(github.ref, 'refs/tags/v') ? '## 正式版发布' : '## 开发版发布（主分支最新代码）' }}
+            
+            ### 提交信息
+            - 分支：${{ github.ref_name }}
+            - 提交SHA：${{ github.sha }}
+            - 提交时间：${{ github.event.head_commit.timestamp }}
+            - 提交说明：${{ github.event.head_commit.message }}
+            
+            ### 产物信息
             - 适配架构：arm64-v8a（天玑1200）
             - 依赖：OpenSSL 1.1.1w + Android NDK 27.3.13750724
             - 最小SDK：21，目标SDK：34
-            - 包含文件：AAR库 + 核心SO库 + 头文件
+            - 包含文件：AAR库 + 核心SO库 + 头文件 + 编译日志
             
-            ## 使用说明
+            ### 使用说明
             1. 下载 `letta-lite-android.aar` 导入Android项目
             2. 无需额外配置OpenSSL（已静态链接）
-          files: ./release/*  # 上传release目录下所有产物到Release
-          draft: false  # 直接发布（不创建草稿）
-          prerelease: false  # 标记为正式版本（非预发布）
+            3. 开发版仅用于测试，正式版可用于生产环境
+          files: ./release/*  # 上传所有产物
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}  # 开发版标记为预发布，正式版为正式发布
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动生成的Token，无需手动配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权，无需手动配置
