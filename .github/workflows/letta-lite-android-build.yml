@@ -86,25 +86,25 @@ jobs:
           fi
           echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      - name: 配置Rust（修复--force参数，验证核心库）
+      # 🔧 关键修复1：彻底去掉所有无效--force，优化核心库验证
+      - name: 配置Rust（彻底修复--force参数，确保核心库存在）
         run: |
-          # 修复：rustup target add 不支持 --force，去掉无效参数
-          rustup toolchain install stable --force  # toolchain install 支持 --force，保留
-          rustup target add ${{ env.TARGET_ARCH }}  # 去掉 --force，正确命令
+          rustup toolchain install stable --force  # 仅toolchain install支持--force，保留
+          rustup target add ${{ env.TARGET_ARCH }}  # 去掉--force（正确命令）
           
-          # 验证目标是否安装成功
+          # 验证目标架构是否安装成功
           if ! rustup target list | grep "${{ env.TARGET_ARCH }}" | grep -q "installed"; then
             echo -e "${RED}❌ Rust目标架构 ${{ env.TARGET_ARCH }} 安装失败！${NC}"
             exit 1
           fi
           
-          # 验证核心库（core）是否存在
+          # 验证核心库（core）是否存在，优化路径判断避免误判
           CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
           if [ ! -d "$CORE_LIB_PATH" ] || [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
             echo -e "${RED}❌ 找不到核心库（core）！路径：$CORE_LIB_PATH${NC}"
             echo -e "${YELLOW}尝试重新安装Rust标准库...${NC}"
-            rustup component add rust-std-${{ env.TARGET_ARCH }} --force  # component add 支持 --force
-            # 再次验证
+            rustup component add rust-std-${{ env.TARGET_ARCH }}  # 去掉--force（关键修复！之前误加）
+            # 再次验证，确保核心库存在
             if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
               echo -e "${RED}❌ 核心库安装失败！无法继续编译${NC}"
               exit 1
@@ -170,38 +170,52 @@ jobs:
             exit 1
           }
 
-      - name: 收集产物（无论成功失败都执行）
+      # 🔧 关键修复2：AAR缺失直接红字报错退出，不打钩（核心需求）
+      - name: 收集产物（AAR缺失强报错，不隐瞒失败）
         if: always()
         run: |
           mkdir -p ./release
           
-          # 收集编译日志
+          # 收集编译日志（必须保留，方便排查）
           if [ -f "build.log" ]; then
             cp build.log ./release/
+            echo -e "${GREEN}✅ 编译日志收集成功${NC}"
+          else
+            echo -e "${RED}❌ 未找到编译日志 build.log（编译过程异常）${NC}"
           fi
           
-          # 收集Rust编译中间产物（方便排查依赖错误）
+          # 收集Rust中间产物（方便排查依赖错误）
           if [ -d "target/aarch64-linux-android/release/deps" ]; then
             mkdir -p ./release/rust-deps
             cp target/aarch64-linux-android/release/deps/*.rlib ./release/rust-deps/ 2>/dev/null
             cp target/aarch64-linux-android/release/deps/*.so ./release/rust-deps/ 2>/dev/null
+            echo -e "${GREEN}✅ Rust中间产物收集成功${NC}"
           fi
           
-          # 收集AAR（如果成功生成）
+          # 核心逻辑：AAR缺失直接报错退出，工作流显示失败（不打钩）
           AAR_PATH=$(find ${{ github.workspace }} -name "*.aar" -path "*/release/*" | head -n 1)
           if [ -n "$AAR_PATH" ]; then
             cp "$AAR_PATH" ./release/letta-lite-android.aar
             echo -e "${GREEN}✅ AAR产物收集成功：$AAR_PATH${NC}"
           else
-            echo -e "${YELLOW}⚠️  未找到AAR产物（可能编译失败）${NC}"
+            echo -e "${RED}❌ 严重错误：未找到AAR产物（编译失败）${NC}"
+            exit 1  # 强制退出，工作流标记失败，不显示打钩
           fi
           
-          # 收集SO库（如果成功生成）
-          find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" -exec cp {} ./release/ \;
-          find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" -exec cp {} ./release/ \;
+          # 收集SO库（备用，即使打包进AAR也保留）
+          FFI_SO=$(find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" | head -n 1)
+          JNI_SO=$(find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" | head -n 1)
+          if [ -n "$FFI_SO" ] && [ -n "$JNI_SO" ]; then
+            cp "$FFI_SO" ./release/
+            cp "$JNI_SO" ./release/
+            echo -e "${GREEN}✅ SO库收集成功${NC}"
+          else
+            echo -e "${YELLOW}⚠️  警告：SO库未单独找到（可能已打包进AAR，不影响使用）${NC}"
+          fi
 
-      - name: 上传产物（无论成功失败都上传）
-        if: always()
+      # 🔧 关键修复3：仅AAR成功生成才上传产物，避免上传空文件夹
+      - name: 上传产物（仅成功生成AAR才上传）
+        if: success()  # 只有前面步骤无错误（AAR存在）才上传
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
