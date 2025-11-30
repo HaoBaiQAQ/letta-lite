@@ -1,9 +1,8 @@
 name: Letta-Lite Android (Tianji1200 + OpenSSL)
 on: 
-  workflow_dispatch:  # 手动触发时也释放
+  workflow_dispatch:  # 手动触发
   push:
-    branches: [main]  # 主分支推送（改源码）自动触发：编译+创建开发版Release
-    tags: ['v*']     # 标签推送（v0.1.0）自动触发：编译+创建正式版Release
+    branches: [main]  # 仅主分支推送（改源码）触发，无正式版
   pull_request:
 
 jobs:
@@ -244,37 +243,36 @@ jobs:
           path: ./release/*
           retention-days: 14
 
-      # 🔧 自动创建GitHub Release（修复缩进错误，统一2空格缩进）
-      - name: 自动创建GitHub Release并上传产物
-        if: success() && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+      # 🔧 自动创建开发版GitHub Release（简洁无冗余）
+      - name: 自动创建开发版Release并上传产物
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
-          # 动态版本号：标签触发用标签名，主分支触发用「v-dev-提交SHA前8位」
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v-dev-{0}', github.sha[:8]) }}
-          # 动态名称：区分正式版和开发版（修复缩进+格式错误）
-          name: ${{ startsWith(github.ref, 'refs/tags/v') ? format('Letta-Lite Android 正式版 {0}', github.ref_name) :format('Letta-Lite Android 开发版（{0}）', github.sha[:8]) }}
-          # 动态描述：包含版本类型、提交信息、产物说明
+          # 标签：固定前缀+提交SHA前8位，唯一标识版本
+          tag_name: "dev-${{ github.sha[:8] }}"
+          # Release名称：清晰表明是开发版+提交标识
+          name: "Letta-Lite Android 开发版（${{ github.sha[:8] }}）"
+          # 描述：只保留关键信息，不冗余
           body: |
-            ${{ startsWith(github.ref, 'refs/tags/v') ? '## 正式版发布' : '## 开发版发布（主分支最新代码）' }}
-            
-            ### 提交信息
-            - 分支：${{ github.ref_name }}
-            - 提交SHA：${{ github.sha }}
-            - 提交时间：${{ github.event.head_commit.timestamp }}
-            - 提交说明：${{ github.event.head_commit.message }}
-            
-            ### 产物信息
+            ## Letta-Lite Android 开发版
             - 适配架构：arm64-v8a（天玑1200）
             - 依赖：OpenSSL 1.1.1w + Android NDK 27.3.13750724
-            - 最小SDK：21，目标SDK：34
-            - 包含文件：AAR库 + 核心SO库 + 头文件 + 编译日志
+            - 最小SDK：21 | 目标SDK：34
+            - 提交标识：${{ github.sha }}（仅主分支最新代码）
+            
+            ### 包含文件
+            - letta-lite-android.aar（核心库，直接导入Android项目）
+            - libletta_ffi.so（Rust核心SO库）
+            - libletta_jni.so（JNI桥接SO库）
+            - letta_lite.h（C头文件）
+            - build.log（编译日志，排查问题用）
             
             ### 使用说明
-            1. 下载 `letta-lite-android.aar` 导入Android项目
+            1. 下载AAR文件导入Android项目
             2. 无需额外配置OpenSSL（已静态链接）
-            3. 开发版仅用于测试，正式版可用于生产环境
+            3. 开发版仅用于测试，请勿用于生产环境
           files: ./release/*  # 上传所有产物
           draft: false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}  # 开发版标记为预发布，正式版为正式发布
+          prerelease: true  # 标记为预发布，区分正式版（虽无正式版，但符合规范）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权，无需手动配置
