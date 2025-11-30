@@ -1,8 +1,8 @@
 name: Letta-Lite Android (Tianji1200 + OpenSSL)
 on: 
-  workflow_dispatch:  # 手动触发（可选）
+  workflow_dispatch:  # 手动触发时也释放
   push:
-    branches-ignore: [main]  # 非main分支推送（改源码）自动触发，排除main分支
+    branches: ['*']  # 所有分支推送（改源码）都触发，不限制main/非main
   pull_request:
 
 jobs:
@@ -243,37 +243,25 @@ jobs:
           path: ./release/*
           retention-days: 14
 
-      # 🔧 自动创建开发版Release（无正式版，推送源码即触发，语法正确）
-      - name: 自动创建开发版Release并上传产物
-        if: success()  # 编译成功就触发，无需标签
+      # 🔧 自动创建开发版Release（无正式版，编译成功即触发，语法正确）
+      - name: 自动创建GitHub Release并上传产物
+        if: success()  # 去掉标签限制，编译成功就触发，无需任何Git操作
         uses: softprops/action-gh-release@v2
         with:
-          # 标签：用分支名+提交SHA前8位，唯一标识，避免冲突（Action支持的语法）
-          tag_name: "dev-${{ github.ref_name }}-${{ github.sha | substr(0, 8) }}"
-          # Release名称：清晰标识分支和提交，无需手动管理版本
-          name: "Letta-Lite Android 开发版（${{ github.ref_name }}-${{ github.sha | substr(0, 8) }}"
-          # 描述：保留核心信息，简洁明了
+          name: Letta-Lite Android 开发版-${{ github.run_id }}  # 用工作流ID唯一标识，无需版本管理
+          tag_name: "dev-${{ github.run_id }}"  # 工作流ID唯一，避免冲突，语法正确
           body: |
-            ## 开发版自动释放（无需手动管理版本）
+            ## 产物信息
             - 适配架构：arm64-v8a（天玑1200）
             - 依赖：OpenSSL 1.1.1w + Android NDK 27.3.13750724
-            - 最小SDK：21 | 目标SDK：34
-            - 关联分支：${{ github.ref_name }}
-            - 提交标识：${{ github.sha }}
+            - 最小SDK：21，目标SDK：34
+            - 包含文件：AAR库 + 核心SO库 + 头文件
             
-            ### 包含文件
-            - letta-lite-android.aar（核心库，直接导入Android项目）
-            - libletta_ffi.so（Rust核心SO库）
-            - libletta_jni.so（JNI桥接SO库）
-            - letta_lite.h（C头文件）
-            - build.log（编译日志）
-            
-            ### 使用说明
-            1. 下载AAR文件直接导入Android项目
+            ## 使用说明
+            1. 下载 `letta-lite-android.aar` 导入Android项目
             2. 无需额外配置OpenSSL（已静态链接）
-            3. 开发版仅用于测试
-          files: ./release/*  # 上传所有产物
-          draft: false
-          prerelease: true  # 标记为预发布，符合开发版定位
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权，无需手动配置
+          files: ./release/*  # 上传release目录下所有产物到Release
+          draft: false  # 直接发布（不创建草稿）
+          prerelease: true  # 标记为开发版，无正式版
+        env: 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动生成的Token，无需手动配置
