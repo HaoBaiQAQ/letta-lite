@@ -43,7 +43,6 @@ jobs:
           CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
           UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
           
-          # 导出所有必需路径到环境变量
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
@@ -53,17 +52,12 @@ jobs:
 
       - name: 编译OpenSSL（解决之前编译失败问题）
         run: |
-          # 1. 创建目录
           mkdir -p "${{ env.OPENSSL_SRC_DIR }}" "${{ env.OPENSSL_INSTALL_DIR }}"
           cd "${{ env.OPENSSL_SRC_DIR }}" || exit 1
 
-          # 2. 下载并解压OpenSSL（校验文件完整性）
-          if [ ! -f "openssl-${{ env.OPENSSL_VERSION }}.tar.gz" ]; then
-            wget -q --no-check-certificate "https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz"
-          fi
+          wget -q --no-check-certificate "https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz"
           tar -xvzf "openssl-${{ env.OPENSSL_VERSION }}.tar.gz" --strip-components=1 > /dev/null 2>&1
 
-          # 3. 配置NDK编译器（正确设置目标架构和API）
           export CC="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
           export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
           export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
@@ -71,39 +65,68 @@ jobs:
           export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
           export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
 
-          # 4. 正确配置OpenSSL（适配Android arm64，禁用无用特性）
           ./Configure android-arm64 no-shared no-asm no-zlib no-ssl3 no-tls1 no-tls1_1 \
             --prefix="${{ env.OPENSSL_INSTALL_DIR }}" \
             --sysroot="${{ env.NDK_SYSROOT }}" \
             -fPIC -march=armv8-a -O2
 
-          # 5. 编译并安装（并行编译，减少时间）
-          make -j$(nproc) > /dev/null 2>&1
-          make install_sw > /dev/null 2>&1
+          make -j$(nproc) > /dev/null 2>&1 || {
+            echo -e "${RED}❌ OpenSSL编译失败！查看编译日志：${NC}"
+            make -j1 V=1  # 重新执行单线程编译，输出详细错误
+            exit 1
+          }
+          make install_sw > /dev/null 2>&1 || {
+            echo -e "${RED}❌ OpenSSL安装失败！${NC}"
+            exit 1
+          }
 
-          # 6. 验证编译结果（确保库文件存在）
           if [ ! -f "${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a" ] || [ ! -f "${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a" ]; then
-            echo -e "${RED}OpenSSL编译失败：未生成库文件${NC}"
+            echo -e "${RED}❌ OpenSSL编译失败：未生成库文件${NC}"
             exit 1
           fi
-          echo -e "${GREEN}OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
+          echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      - name: 配置Rust（确保core库正确安装）
+      - name: 配置Rust（强制安装目标+验证核心库）
         run: |
-          rustup toolchain install stable
-          rustup target add ${{ env.TARGET_ARCH }}
-          # 验证目标架构已安装
-          rustup target list | grep "${{ env.TARGET_ARCH }}" | grep "installed" || { echo -e "${RED}Rust目标架构未安装${NC}"; exit 1; }
+          # 强制重新安装目标，避免缓存失效
+          rustup toolchain install stable --force
+          rustup target add ${{ env.TARGET_ARCH }} --force
+          
+          # 验证目标是否安装成功
+          if ! rustup target list | grep "${{ env.TARGET_ARCH }}" | grep -q "installed"; then
+            echo -e "${RED}❌ Rust目标架构 ${{ env.TARGET_ARCH }} 安装失败！${NC}"
+            exit 1
+          fi
+          
+          # 验证核心库（core）是否存在
+          CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
+          if [ ! -d "$CORE_LIB_PATH" ] || [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
+            echo -e "${RED}❌ 找不到核心库（core）！路径：$CORE_LIB_PATH${NC}"
+            echo -e "${YELLOW}尝试重新安装Rust标准库...${NC}"
+            rustup component add rust-std-${{ env.TARGET_ARCH }} --force
+            # 再次验证
+            if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
+              echo -e "${RED}❌ 核心库安装失败！无法继续编译${NC}"
+              exit 1
+            fi
+          fi
+          echo -e "${GREEN}✅ Rust目标架构和核心库验证成功${NC}"
 
-      - name: 安装cargo-ndk（固定版本，避免兼容性问题）
-        run: cargo install cargo-ndk --version=3.5.4 --locked
+      - name: 安装cargo-ndk（固定版本）
+        run: |
+          if ! cargo ndk --version &> /dev/null; then
+            cargo install cargo-ndk --version=3.5.4 --locked || {
+              echo -e "${RED}❌ cargo-ndk安装失败！${NC}"
+              exit 1
+            }
+          fi
 
-      - name: 配置Gradle 7.5（稳定版本，适配NDK 27）
+      - name: 配置Gradle 7.5
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 7.5
 
-      - name: 创建Cargo配置（添加 libc 适配 + 正确链接）
+      - name: 创建Cargo配置（添加libc适配）
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
@@ -120,9 +143,8 @@ jobs:
               "-l", "dylib=log",
               "-l", "dylib=m",
               "-l", "dylib=c",
-              "-C", "link-arg=--target=aarch64-linux-android24"  # 明确链接器目标
+              "-C", "link-arg=--target=aarch64-linux-android24"
           ]
-          # 全局配置 libc 适配 Android，避免特性冲突
           [dependencies.libc]
           features = ["android"]
           default-features = false
@@ -131,7 +153,7 @@ jobs:
       - name: 赋予脚本执行权限
         run: chmod +x ./scripts/build-android-64bit-minimal.sh
 
-      - name: 执行编译脚本（传递所有必需环境变量）
+      - name: 执行编译脚本（传递所有环境变量）
         run: |
           export NDK_PATH=${{ env.NDK_PATH }}
           export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
@@ -140,22 +162,46 @@ jobs:
           export OPENSSL_INSTALL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
           export TARGET=${{ env.TARGET_ARCH }}
           export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
-          ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log
+          # 传递核心库路径，避免脚本里找不到
+          export CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
+          
+          ./scripts/build-android-64bit-minimal.sh 2>&1 | tee build.log || {
+            echo -e "${RED}❌ 编译脚本执行失败！查看build.log获取详细错误${NC}"
+            exit 1
+          }
 
-      - name: 收集产物（含日志，方便排查）
+      - name: 收集产物（无论成功失败都执行）
+        if: always()
         run: |
           mkdir -p ./release
-          cp build.log ./release/
-          # 收集AAR
+          
+          # 收集编译日志
+          if [ -f "build.log" ]; then
+            cp build.log ./release/
+          fi
+          
+          # 收集Rust编译中间产物（方便排查依赖错误）
+          if [ -d "target/aarch64-linux-android/release/deps" ]; then
+            mkdir -p ./release/rust-deps
+            cp target/aarch64-linux-android/release/deps/*.rlib ./release/rust-deps/ 2>/dev/null
+            cp target/aarch64-linux-android/release/deps/*.so ./release/rust-deps/ 2>/dev/null
+          fi
+          
+          # 收集AAR（如果成功生成）
           AAR_PATH=$(find ${{ github.workspace }} -name "*.aar" -path "*/release/*" | head -n 1)
           if [ -n "$AAR_PATH" ]; then
             cp "$AAR_PATH" ./release/letta-lite-android.aar
+            echo -e "${GREEN}✅ AAR产物收集成功：$AAR_PATH${NC}"
+          else
+            echo -e "${YELLOW}⚠️  未找到AAR产物（可能编译失败）${NC}"
           fi
-          # 收集SO库
+          
+          # 收集SO库（如果成功生成）
           find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" -exec cp {} ./release/ \;
           find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" -exec cp {} ./release/ \;
 
-      - name: 上传产物
+      - name: 上传产物（无论成功失败都上传）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
