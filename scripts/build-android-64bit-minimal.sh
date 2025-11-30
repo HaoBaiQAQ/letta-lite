@@ -29,13 +29,28 @@ check_command cbindgen
 check_command gradle
 check_command rustc
 
-# 验证核心库（从工作流传递的路径）
+# 🔧 核心修复：同步工作流逻辑，匹配带哈希后缀的核心库
 echo -e "\n${YELLOW}=== 验证 Rust 核心库 ===${NC}"
-if [ -z "${CORE_LIB_PATH:-}" ] || [ ! -f "${CORE_LIB_PATH}/libcore.rlib" ]; then
-  echo -e "${RED}❌ 核心库（core）路径无效或文件缺失！路径：${CORE_LIB_PATH}${NC}"
+# 从工作流传递的 CORE_LIB_PATH 环境变量（和工作流验证的路径一致）
+if [ -z "${CORE_LIB_PATH:-}" ]; then
+  echo -e "${RED}❌ 核心库路径未传递！CORES_LIB_PATH 环境变量缺失${NC}"
   exit 1
 fi
-echo -e "${GREEN}✅ 核心库路径有效：${CORE_LIB_PATH}/libcore.rlib${NC}"
+
+# 用通配符匹配带哈希后缀的核心库（libcore-*.rlib）
+CORE_LIB_FILE=$(ls -1 "${CORE_LIB_PATH}" 2>/dev/null | grep -E "^libcore-.*\.rlib$" | head -n 1)
+if [ -z "${CORE_LIB_FILE}" ]; then
+  echo -e "${RED}❌ 核心库文件缺失！路径：${CORE_LIB_PATH}${NC}"
+  echo -e "${YELLOW}目录下所有文件：${NC}"
+  ls -l "${CORE_LIB_PATH}" 2>/dev/null || echo "目录为空"
+  exit 1
+fi
+
+# 验证通过，打印核心库信息
+echo -e "${GREEN}✅ 核心库验证成功！${NC}"
+echo -e "核心库路径：${CORE_LIB_PATH}"
+echo -e "核心库文件：${CORE_LIB_FILE}"
+echo -e "完整路径：${CORE_LIB_PATH}/${CORE_LIB_FILE}"
 
 # 配置 settings.gradle
 echo -e "\n${YELLOW}=== 配置 settings.gradle ===${NC}"
@@ -82,6 +97,7 @@ echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
+# 确保 RUSTFLAGS 包含核心库路径
 export RUSTFLAGS="--sysroot=${NDK_SYSROOT} -L ${UNWIND_LIB_PATH} -L ${OPENSSL_INSTALL_DIR}/lib -C link-arg=--target=aarch64-linux-android24 -L ${CORE_LIB_PATH}"
 
 # 执行编译，失败则输出详细错误
