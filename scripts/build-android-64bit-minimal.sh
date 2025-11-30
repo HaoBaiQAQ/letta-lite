@@ -182,14 +182,15 @@ if ! gradle assembleRelease --no-daemon \
 fi
 cd ../..
 
-# 收集产物
+# 收集产物（核心优化：扩大 AAR 搜索范围，打印找到的路径）
 echo -e "\n${YELLOW}=== 收集产物 ===${NC}"
-AAR_PATH=$(find "${ANDROID_PROJECT_DIR}/build/outputs/aar" -name "*.aar" -path "*/release/*" | head -n 1)
+# 🔧 优化1：去掉 release 路径限制，搜索所有 .aar 文件（解决 Gradle 生成路径不匹配问题）
+AAR_PATH=$(find "${ANDROID_PROJECT_DIR}/build/outputs/aar" -name "*.aar" | head -n 1)
 AAR_FINAL="${PROJECT_ROOT}/release/letta-lite-android.aar"
 mkdir -p "${PROJECT_ROOT}/release"
 
 if [ -z "${AAR_PATH}" ]; then
-  echo -e "${RED}❌ Error: 未找到 AAR 产物${NC}"
+  echo -e "${RED}❌ Error: 未找到自动打包的 AAR 产物${NC}"
   echo -e "${YELLOW}尝试手动打包 AAR...${NC}"
   TEMP_AAR="${PROJECT_ROOT}/temp_aar"
   mkdir -p "${TEMP_AAR}/jni/arm64-v8a" "${TEMP_AAR}/include" "${TEMP_AAR}/classes"
@@ -214,14 +215,16 @@ EOF
   rm -rf "${TEMP_AAR}"
   echo -e "${YELLOW}⚠️  手动打包 AAR 成功：${AAR_FINAL}${NC}"
 else
+  # 🔧 优化2：打印自动打包的 AAR 路径，方便排查
+  echo -e "${GREEN}✅ 找到自动打包的 AAR：${AAR_PATH}${NC}"
   cp "${AAR_PATH}" "${AAR_FINAL}"
-  echo -e "${GREEN}✅ AAR 打包成功：${AAR_FINAL}${NC}"
+  echo -e "${GREEN}✅ 自动打包 AAR 复制成功：${AAR_FINAL}${NC}"
 fi
 
 # 恢复原 settings.gradle
 mv "${SETTINGS_FILE}.ci.bak" "${SETTINGS_FILE}" 2>/dev/null || true
 
-# 复制其他产物
+# 🔧 优化3：删除冗余的 AAR 复制（只复制 SO 库和头文件，避免同一文件报错）
 cp "${CORE_SO}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
 cp "${JNI_SO}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
 cp "${HEADER_FILE}" "${PROJECT_ROOT}/release/" 2>/dev/null || true
@@ -236,3 +239,6 @@ echo -e "\n${GREEN}🎉 所有产物生成成功！！！${NC}"
 echo -e "${GREEN}📦 release 目录包含：${NC}"
 ls -l "${PROJECT_ROOT}/release/"
 echo -e "\n${YELLOW}🚀 AAR 可直接导入 Android 项目使用！${NC}"
+
+# 🔧 优化4：添加产物路径输出，方便 CI 上传（确保上传脚本能获取到正确路径）
+echo -e "\n${YELLOW}📌 产物上传路径：${AAR_FINAL}${NC}"
