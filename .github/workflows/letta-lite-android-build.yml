@@ -252,7 +252,7 @@ jobs:
           # 动态版本号：标签触发用标签名，主分支触发用「v-dev-提交SHA前8位」
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v-dev-{0}', github.sha[:8]) }}
           # 动态名称：区分正式版和开发版（修复缩进+格式错误）
-          name: ${{ startsWith(github.ref, 'refs/tags/v') ? format('Letta-Lite Android 正式版 {0}', github.ref_name) : format('Letta-Lite Android 开发版（{0}）', github.sha[:8]) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') ? format('Letta-Lite Android 正式版 {0}', github.ref_name) :format('Letta-Lite Android 开发版（{0}）', github.sha[:8]) }}
           # 动态描述：包含版本类型、提交信息、产物说明
           body: |
             ${{ startsWith(github.ref, 'refs/tags/v') ? '## 正式版发布' : '## 开发版发布（主分支最新代码）' }}
