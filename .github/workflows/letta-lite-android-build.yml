@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config binutils \
-            gcc g++ tree  # 新增 tree 工具，用于打印目录结构
+            gcc g++ tree  # 用于打印目录结构
           java -version
           gradle -v
 
@@ -86,30 +86,30 @@ jobs:
           fi
           echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      # 🔧 核心修改：安装后强制打印目录，可视化验证核心库
+      # 🔧 修复核心：去掉 rustup 不支持的 -y 和 --verbose 参数
       - name: 配置Rust（安装后打印目录，确保核心库存在）
         run: |
-          # 1. 彻底清理旧缓存，避免干扰
-          rustup toolchain uninstall stable -y || true
-          rustup target remove ${{ env.TARGET_ARCH }} -y || true
-          rustup component remove rust-std-${{ env.TARGET_ARCH }} -y || true
+          # 1. 彻底清理旧缓存（去掉 -y，用 || true 忽略不存在的情况）
+          rustup toolchain uninstall stable || true
+          rustup target remove ${{ env.TARGET_ARCH }} || true
+          rustup component remove rust-std-${{ env.TARGET_ARCH }} || true
 
-          # 2. 重新安装 stable 工具链
+          # 2. 重新安装 stable 工具链（去掉 --verbose，rustup 不支持）
           echo -e "${YELLOW}正在安装 Rust stable 工具链...${NC}"
           rustup toolchain install stable --force
           echo -e "${GREEN}✅ Rust stable 工具链安装完成${NC}"
 
-          # 3. 重新安装目标架构
+          # 3. 重新安装目标架构（去掉 --verbose，正确命令）
           echo -e "${YELLOW}正在安装 ${{ env.TARGET_ARCH }} 目标架构...${NC}"
-          rustup target add ${{ env.TARGET_ARCH }} --verbose
+          rustup target add ${{ env.TARGET_ARCH }}
           echo -e "${GREEN}✅ 目标架构安装完成${NC}"
 
-          # 4. 手动指定核心库路径（和之前一致，验证路径是否存在）
+          # 4. 手动指定核心库路径，打印验证
           CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
           echo -e "\n${YELLOW}=== 开始打印核心库目录验证 ===${NC}"
           echo -e "核心库目录路径：${CORE_LIB_PATH}"
 
-          # 5. 打印目录是否存在
+          # 5. 验证目录是否存在
           if [ -d "$CORE_LIB_PATH" ]; then
             echo -e "${GREEN}✅ 核心库目录存在${NC}"
           else
@@ -117,13 +117,16 @@ jobs:
             exit 1
           fi
 
-          # 6. 打印目录下所有文件（关键！可视化看是否有 libcore.rlib）
+          # 6. 打印目录下所有文件（关键：可视化确认 libcore.rlib 是否存在）
           echo -e "\n${YELLOW}核心库目录下的所有文件：${NC}"
-          ls -l "$CORE_LIB_PATH"  # 打印完整文件列表
-          echo -e "\n${YELLOW}过滤核心库相关文件（libcore*.rlib）：${NC}"
-          ls -l "$CORE_LIB_PATH" | grep -E "libcore|libstd"  # 只显示核心库和标准库文件
+          ls -l "$CORE_LIB_PATH"
+          echo -e "\n${YELLOW}过滤核心库/标准库文件：${NC}"
+          ls -l "$CORE_LIB_PATH" | grep -E "libcore|libstd" || {
+            echo -e "${YELLOW}⚠️  未过滤到核心库文件，显示完整列表确认${NC}"
+            ls -l "$CORE_LIB_PATH"
+          }
 
-          # 7. 打印目录结构（备用，防止文件藏在子目录）
+          # 7. 打印目录结构（备用）
           echo -e "\n${YELLOW}核心库目录完整结构：${NC}"
           tree "$CORE_LIB_PATH" 2>/dev/null || echo "tree 工具未安装，跳过目录结构打印"
 
