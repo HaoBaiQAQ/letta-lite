@@ -51,6 +51,12 @@ android {
     }
 }
 
+// 🔧 核心添加：项目级仓库配置（告诉 Gradle 去哪里下载 Kotlin、Gson 等库）
+repositories {
+    google()
+    mavenCentral()
+}
+
 dependencies {
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.20'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
