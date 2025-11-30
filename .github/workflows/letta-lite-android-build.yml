@@ -108,7 +108,7 @@ jobs:
           rustup target add ${{ env.TARGET_ARCH }}
           echo -e "${GREEN}✅ 目标架构安装完成${NC}"
 
-          # 3. 验证核心库（关键：用通配符匹配带哈希后缀的文件）
+          # 3. 验证核心库（关键：用通配符匹配带哈希后缀的核心库）
           CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
           echo -e "\n${YELLOW}=== 核心库验证（支持带哈希后缀） ===${NC}"
           echo -e "核心库目录：$CORE_LIB_PATH"
@@ -243,22 +243,22 @@ jobs:
           path: ./release/*
           retention-days: 14
 
-      # 🔧 自动创建开发版GitHub Release（简洁无冗余）
+      # 🔧 自动创建开发版GitHub Release（修复语法错误，Action支持的截取方式）
       - name: 自动创建开发版Release并上传产物
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          # 标签：固定前缀+提交SHA前8位，唯一标识版本
-          tag_name: "dev-${{ github.sha[:8] }}"
+          # 标签：用Action支持的substr(0,8)截取提交SHA前8位
+          tag_name: "dev-${{ github.sha | substr(0, 8) }}"
           # Release名称：清晰表明是开发版+提交标识
-          name: "Letta-Lite Android 开发版（${{ github.sha[:8] }}）"
-          # 描述：只保留关键信息，不冗余
+          name: "Letta-Lite Android 开发版（${{ github.sha | substr(0, 8) }}"
+          # 描述：只保留关键信息，无冗余
           body: |
             ## Letta-Lite Android 开发版
             - 适配架构：arm64-v8a（天玑1200）
             - 依赖：OpenSSL 1.1.1w + Android NDK 27.3.13750724
             - 最小SDK：21 | 目标SDK：34
-            - 提交标识：${{ github.sha }}（仅主分支最新代码）
+            - 提交标识：${{ github.sha }}（主分支最新代码）
             
             ### 包含文件
             - letta-lite-android.aar（核心库，直接导入Android项目）
@@ -273,6 +273,6 @@ jobs:
             3. 开发版仅用于测试，请勿用于生产环境
           files: ./release/*  # 上传所有产物
           draft: false
-          prerelease: true  # 标记为预发布，区分正式版（虽无正式版，但符合规范）
+          prerelease: true  # 标记为预发布
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权，无需手动配置
