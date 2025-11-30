@@ -1,5 +1,11 @@
 name: Letta-Lite Android (Tianji1200 + OpenSSL)
-on: [workflow_dispatch, push, pull_request]
+on: 
+  workflow_dispatch:  # 手动触发时也释放
+  push:
+    branches: [main]  # 主分支推送时触发工作流释放
+    tags: ['v*']     # 推送 v0.1.0 这类tag时，额外触发Git Releases释放
+  pull_request:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -209,28 +215,53 @@ jobs:
             exit 1
           }
 
-      - name: 收集产物（AAR缺失强报错）
+      # 🔧 修复：删除冗余复制，直接使用脚本生成的release目录（解决同一文件报错）
+      - name: 验证产物（不重复复制，仅检查存在性）
         if: always()
         run: |
-          mkdir -p ./release
-          if [ -f "build.log" ]; then
-            cp build.log ./release/
-          fi
-          AAR_PATH=$(find ${{ github.workspace }} -name "*.aar" -path "*/release/*" | head -n 1)
-          if [ -n "$AAR_PATH" ]; then
-            cp "$AAR_PATH" ./release/letta-lite-android.aar
-            echo -e "${GREEN}✅ AAR产物收集成功${NC}"
-          else
+          # 脚本已经生成所有产物到 ./release 目录，直接验证
+          if [ ! -f "./release/letta-lite-android.aar" ]; then
             echo -e "${RED}❌ 未找到AAR产物（编译失败）${NC}"
             exit 1
           fi
-          find ${{ github.workspace }} -name "libletta_ffi.so" -path "*/arm64*" -exec cp {} ./release/ \;
-          find ${{ github.workspace }} -name "libletta_jni.so" -path "*/arm64*" -exec cp {} ./release/ \;
+          if [ ! -f "./release/libletta_ffi.so" ] || [ ! -f "./release/libletta_jni.so" ]; then
+            echo -e "${RED}❌ 缺失SO库产物${NC}"
+            exit 1
+          fi
+          # 复制build.log到release目录（便于排查）
+          if [ -f "build.log" ]; then
+            cp build.log ./release/
+          fi
+          echo -e "${GREEN}✅ 所有产物验证通过！${NC}"
+          ls -l ./release/
 
-      - name: 上传产物（仅成功时上传）
+      # 🔧 工作流释放：上传Artifact（在工作流页面下载）
+      - name: 上传工作流产物
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: ./release/*
           retention-days: 14
+
+      # 🔧 Git Releases释放：推送tag时自动创建Release（在Git页面下载）
+      - name: 自动创建GitHub Release并上传产物
+        if: success() && startsWith(github.ref, 'refs/tags/v')  # 仅推送v*标签时触发
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Letta-Lite Android v${{ github.ref_name }}  # Release名称（含版本号）
+          body: |
+            ## 产物信息
+            - 适配架构：arm64-v8a（天玑1200）
+            - 依赖：OpenSSL 1.1.1w + Android NDK 27.3.13750724
+            - 最小SDK：21，目标SDK：34
+            - 包含文件：AAR库 + 核心SO库 + 头文件
+            
+            ## 使用说明
+            1. 下载 `letta-lite-android.aar` 导入Android项目
+            2. 无需额外配置OpenSSL（已静态链接）
+          files: ./release/*  # 上传release目录下所有产物到Release
+          draft: false  # 直接发布（不创建草稿）
+          prerelease: false  # 标记为正式版本（非预发布）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动生成的Token，无需手动配置
