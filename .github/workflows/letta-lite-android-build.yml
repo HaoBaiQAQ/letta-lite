@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y \
             rustc cargo git make cbindgen openjdk-17-jdk \
             wget curl unzip gradle perl pkg-config binutils \
-            gcc g++ tree  # 用于打印目录结构
+            gcc g++ tree
           java -version
           gradle -v
 
@@ -86,57 +86,55 @@ jobs:
           fi
           echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      # 🔧 修复核心：去掉 rustup 不支持的 -y 和 --verbose 参数
-      - name: 配置Rust（安装后打印目录，确保核心库存在）
+      # 🔧 核心修复：匹配带哈希后缀的核心库文件（libcore-*.rlib）
+      - name: 配置Rust（正确识别带哈希后缀的核心库）
         run: |
-          # 1. 彻底清理旧缓存（去掉 -y，用 || true 忽略不存在的情况）
+          # 1. 清理旧缓存
           rustup toolchain uninstall stable || true
           rustup target remove ${{ env.TARGET_ARCH }} || true
           rustup component remove rust-std-${{ env.TARGET_ARCH }} || true
 
-          # 2. 重新安装 stable 工具链（去掉 --verbose，rustup 不支持）
+          # 2. 重新安装工具链和目标架构
           echo -e "${YELLOW}正在安装 Rust stable 工具链...${NC}"
           rustup toolchain install stable --force
           echo -e "${GREEN}✅ Rust stable 工具链安装完成${NC}"
 
-          # 3. 重新安装目标架构（去掉 --verbose，正确命令）
           echo -e "${YELLOW}正在安装 ${{ env.TARGET_ARCH }} 目标架构...${NC}"
           rustup target add ${{ env.TARGET_ARCH }}
           echo -e "${GREEN}✅ 目标架构安装完成${NC}"
 
-          # 4. 手动指定核心库路径，打印验证
+          # 3. 验证核心库（关键：用通配符匹配带哈希后缀的文件）
           CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
-          echo -e "\n${YELLOW}=== 开始打印核心库目录验证 ===${NC}"
-          echo -e "核心库目录路径：${CORE_LIB_PATH}"
+          echo -e "\n${YELLOW}=== 核心库验证（支持带哈希后缀） ===${NC}"
+          echo -e "核心库目录：$CORE_LIB_PATH"
 
-          # 5. 验证目录是否存在
-          if [ -d "$CORE_LIB_PATH" ]; then
-            echo -e "${GREEN}✅ 核心库目录存在${NC}"
-          else
+          # 检查目录存在
+          if [ ! -d "$CORE_LIB_PATH" ]; then
             echo -e "${RED}❌ 核心库目录不存在！${NC}"
             exit 1
           fi
 
-          # 6. 打印目录下所有文件（关键：可视化确认 libcore.rlib 是否存在）
-          echo -e "\n${YELLOW}核心库目录下的所有文件：${NC}"
-          ls -l "$CORE_LIB_PATH"
-          echo -e "\n${YELLOW}过滤核心库/标准库文件：${NC}"
-          ls -l "$CORE_LIB_PATH" | grep -E "libcore|libstd" || {
-            echo -e "${YELLOW}⚠️  未过滤到核心库文件，显示完整列表确认${NC}"
-            ls -l "$CORE_LIB_PATH"
-          }
-
-          # 7. 打印目录结构（备用）
-          echo -e "\n${YELLOW}核心库目录完整结构：${NC}"
-          tree "$CORE_LIB_PATH" 2>/dev/null || echo "tree 工具未安装，跳过目录结构打印"
-
-          # 8. 最终验证 libcore.rlib 是否存在
-          if [ -f "$CORE_LIB_PATH/libcore.rlib" ]; then
-            echo -e "\n${GREEN}🎉 核心库验证成功！已找到 $CORE_LIB_PATH/libcore.rlib${NC}"
+          # 🔴 修复判断逻辑：用 libcore-*.rlib 匹配带哈希后缀的核心库
+          CORE_LIB_FILE=$(ls -1 "$CORE_LIB_PATH" | grep -E "^libcore-.*\.rlib$" | head -n 1)
+          if [ -n "$CORE_LIB_FILE" ]; then
+            echo -e "${GREEN}✅ 找到核心库：$CORE_LIB_FILE${NC}"
+            echo -e "完整路径：$CORE_LIB_PATH/$CORE_LIB_FILE"
           else
-            echo -e "\n${RED}❌ 核心库缺失！目录下没有 libcore.rlib${NC}"
+            echo -e "${RED}❌ 未找到核心库（libcore-*.rlib）！${NC}"
+            echo -e "目录下所有文件："
+            ls -l "$CORE_LIB_PATH"
             exit 1
           fi
+
+          # 额外验证标准库（可选，确保环境完整）
+          STD_LIB_FILE=$(ls -1 "$CORE_LIB_PATH" | grep -E "^libstd-.*\.rlib$" | head -n 1)
+          if [ -n "$STD_LIB_FILE" ]; then
+            echo -e "${GREEN}✅ 找到标准库：$STD_LIB_FILE${NC}"
+          else
+            echo -e "${YELLOW}⚠️  未找到标准库（libstd-*.rlib），可能影响编译${NC}"
+          fi
+
+          echo -e "\n${GREEN}🎉 核心库验证通过！环境就绪${NC}"
 
       - name: 安装cargo-ndk（固定版本）
         run: |
