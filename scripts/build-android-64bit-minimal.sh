@@ -88,8 +88,7 @@ if [ -z "${OPENSSL_INSTALL_DIR:-}" ] || [ ! -d "${OPENSSL_INSTALL_DIR}/lib" ]; t
 fi
 echo -e "${GREEN}✅ CI 环境验证通过${NC}"
 
-# 🔧 核心修复：删除 --config 中 openssl-sys 的嵌套语法（语法错误源头）
-# 保留 libc 的 config 配置（之前已验证有效），删除 openssl-sys 的 3 个 --config 参数
+# 🔧 核心修复：删除 RUSTFLAGS 中不识别的 -I 选项 + 已删 openssl-sys 错误 config
 echo -e "\n${YELLOW}=== 编译 Rust 核心库 ===${NC}"
 export CC="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang"
 export CXX="${NDK_TOOLCHAIN_BIN}/${TARGET}-clang++"
@@ -97,14 +96,13 @@ export RUSTFLAGS="\
   --sysroot=${NDK_SYSROOT} \
   -L ${UNWIND_LIB_PATH} \
   -L ${OPENSSL_INSTALL_DIR}/lib \
-  -I ${OPENSSL_INSTALL_DIR}/include \
   -C link-arg=--target=aarch64-linux-android24 \
   -L ${CORE_LIB_PATH} \
   -C link-arg=-L${OPENSSL_INSTALL_DIR}/lib"
 
 if ! cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_PROJECT_DIR}/src/main/jniLibs" build --release --verbose -p letta-ffi \
     --config "dependencies.libc.features = [\"android\"]" \
-    --config "dependencies.libc.default-features = false"; then  # 只保留 libc 的 config，删除 openssl-sys 相关
+    --config "dependencies.libc.default-features = false"; then
   echo -e "${RED}❌ Rust 核心库编译失败！${NC}"
   echo -e "${YELLOW}openssl-sys 配置信息：${NC}"
   echo "OPENSSL_DIR: ${OPENSSL_DIR:-${OPENSSL_INSTALL_DIR}}"
