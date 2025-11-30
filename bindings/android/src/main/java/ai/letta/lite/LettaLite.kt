@@ -46,6 +46,11 @@ class LettaLite(config: AgentConfig = AgentConfig()) : Closeable {
                 throw LettaException("Failed to configure sync")
             }
         }
+        
+        // 🔧 核心修改：把这两个 native 方法移到 companion object 内部（静态 native 方法）
+        // 无权限修饰符 = 默认 public，JNI 可识别，无副作用
+        external fun nativeInitStorage(path: String): Int
+        external fun nativeConfigureSync(configJson: String): Int
     }
     
     /**
@@ -135,8 +140,7 @@ class LettaLite(config: AgentConfig = AgentConfig()) : Closeable {
         }
     }
     
-    // Native methods
-    public external fun nativeInitStorage(path: String): Int  // 最终修改：internal → public
+    // Native methods（其他方法不变，仅移除上面两个）
     private external fun nativeCreateAgent(configJson: String): Long
     private external fun nativeFreeAgent(handle: Long)
     private external fun nativeLoadAF(handle: Long, json: String): Int
@@ -146,11 +150,10 @@ class LettaLite(config: AgentConfig = AgentConfig()) : Closeable {
     private external fun nativeAppendArchival(handle: Long, folder: String, text: String): Int
     private external fun nativeSearchArchival(handle: Long, query: String, topK: Int): String?
     private external fun nativeConverse(handle: Long, messageJson: String): String?
-    public external fun nativeConfigureSync(configJson: String): Int  // 最终修改：internal → public
     private external fun nativeSyncWithCloud(handle: Long): Int
 }
 
-// Data classes
+// Data classes（完全不变）
 data class AgentConfig(
     val name: String = "assistant",
     @SerializedName("system_prompt")
