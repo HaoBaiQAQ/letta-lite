@@ -89,8 +89,6 @@ if ! cargo ndk --platform "${ANDROID_API_LEVEL:-24}" -t arm64-v8a -o "${ANDROID_
     --config "dependencies.libc.features = [\"android\"]" \
     --config "dependencies.libc.default-features = false"; then
   echo -e "${RED}❌ Rust 核心库编译失败！${NC}"
-  # 输出最近的编译错误日志
-  echo -e "${YELLOW}最近的错误日志：${NC}"
   tail -n 50 build.log
   exit 1
 fi
@@ -167,7 +165,6 @@ if ! ./gradlew assembleRelease --no-daemon \
     -Pandroid.targetSdkVersion=34 \
     -Pandroid.ndkPath="${NDK_PATH:-}"; then
   echo -e "${RED}❌ AAR 打包失败！${NC}"
-  # 输出 Gradle 错误日志
   tail -n 50 ./build/logs/gradle.log 2>/dev/null
   exit 1
 fi
