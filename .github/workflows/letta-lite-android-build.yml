@@ -86,11 +86,11 @@ jobs:
           fi
           echo -e "${GREEN}✅ OpenSSL编译成功：${{ env.OPENSSL_INSTALL_DIR }}/lib${NC}"
 
-      - name: 配置Rust（强制安装目标+验证核心库）
+      - name: 配置Rust（修复--force参数，验证核心库）
         run: |
-          # 强制重新安装目标，避免缓存失效
-          rustup toolchain install stable --force
-          rustup target add ${{ env.TARGET_ARCH }} --force
+          # 修复：rustup target add 不支持 --force，去掉无效参数
+          rustup toolchain install stable --force  # toolchain install 支持 --force，保留
+          rustup target add ${{ env.TARGET_ARCH }}  # 去掉 --force，正确命令
           
           # 验证目标是否安装成功
           if ! rustup target list | grep "${{ env.TARGET_ARCH }}" | grep -q "installed"; then
@@ -103,7 +103,7 @@ jobs:
           if [ ! -d "$CORE_LIB_PATH" ] || [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
             echo -e "${RED}❌ 找不到核心库（core）！路径：$CORE_LIB_PATH${NC}"
             echo -e "${YELLOW}尝试重新安装Rust标准库...${NC}"
-            rustup component add rust-std-${{ env.TARGET_ARCH }} --force
+            rustup component add rust-std-${{ env.TARGET_ARCH }} --force  # component add 支持 --force
             # 再次验证
             if [ ! -f "$CORE_LIB_PATH/libcore.rlib" ]; then
               echo -e "${RED}❌ 核心库安装失败！无法继续编译${NC}"
