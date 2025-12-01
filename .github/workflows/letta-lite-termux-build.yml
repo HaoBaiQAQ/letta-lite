@@ -4,7 +4,7 @@ on:
   push:
     branches: ['main']
     paths:
-      - ".github/workflows/本工作流文件名.yml"  # 替换为当前工作流的实际文件名（必填）
+      - ".github/workflows/letta-lite-termux-build.yml"  # 替换为当前工作流的实际文件名（必填）
       - "examples/node-cli/**"
       - "src/**"
       - "package.json"
