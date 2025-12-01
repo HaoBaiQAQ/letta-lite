@@ -1,6 +1,6 @@
-name: 仅输出 Termux 独立可执行文件（纯净版）
+name: Termux命令窗独立文件（SO+JS缝合版）
 on: 
-  workflow_dispatch:  # 仅手动触发，避免误触发
+  workflow_dispatch:  # 仅手动触发，避免干扰
   push:
     branches: ['main']
     paths: 
@@ -9,7 +9,7 @@ on:
       - "bindings/node/**"
 
 jobs:
-  build-termux-pure:
+  build-termux-stitch:
     runs-on: ubuntu-latest
     env:
       OPENSSL_VERSION: 1.1.1w
@@ -18,40 +18,44 @@ jobs:
       TARGET_ARCH: aarch64-linux-android
       ANDROID_API_LEVEL: 24
       NODE_VERSION: 18.20.3
-      CLI_OUTPUT_NAME: letta-termux-cli  # 仅保留这个核心文件
+      CLI_OUTPUT_NAME: letta-termux-cli  # 最终缝合后的独立文件
+      # 关键：禁用Android编译脚本的环境变量（防止误触发）
+      DISABLE_ANDROID_BUILD: true
 
     steps:
-      # 步骤1：拉取代码
+      # 步骤1：拉取代码（含子模块）
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      # 步骤2：安装最小化依赖
+      # 步骤2：安装最小化依赖（删除Gradle/Java等Android相关工具）
       - name: Install minimal dependencies
         run: |
           sudo apt-get update --fix-missing
           sudo apt-get install -y \
             rustc cargo git make wget curl perl pkg-config binutils gcc g++
+          # 卸载可能存在的Android相关工具，避免干扰
+          sudo apt-get remove -y openjdk-* gradle android-sdk* 2>/dev/null
           rustc --version
           cargo --version
 
-      # 步骤3：安装 Android NDK（仅交叉编译用）
-      - name: Install Android NDK
+      # 步骤3：安装Android NDK（仅用于交叉编译SO库，不生成AAR）
+      - name: Install Android NDK（仅交叉编译用）
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           packages: "ndk;27.3.13750724"
 
-      # 步骤4：查找 NDK 路径
+      # 步骤4：查找NDK路径
       - name: Find NDK path
         run: |
           NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "27.3.13750724$")
           echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
           echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
 
-      # 步骤5：编译 OpenSSL
+      # 步骤5：编译OpenSSL（静态编译，供Rust SO库使用）
       - name: Build OpenSSL
         run: |
           mkdir -p "${{ env.OPENSSL_SRC_DIR }}" "${{ env.OPENSSL_INSTALL_DIR }}"
@@ -74,41 +78,50 @@ jobs:
           make -j$(nproc) > /dev/null 2>&1 || { echo "❌ OpenSSL build failed"; exit 1; }
           make install_sw > /dev/null 2>&1 || { echo "❌ OpenSSL install failed"; exit 1; }
 
-      # 步骤6：配置 Rust
+      # 步骤6：配置Rust（交叉编译ARM64 SO库）
       - name: Configure Rust
         run: |
           rustup toolchain install stable --force
           rustup target add ${{ env.TARGET_ARCH }}
+          # 设置Rust编译参数，避免生成JNI或AAR相关产物
+          echo 'CARGO_BUILD_TARGET=${{ env.TARGET_ARCH }}' >> $GITHUB_ENV
+          echo 'OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}' >> $GITHUB_ENV
 
-      # 步骤7：编译 Rust SO 库（仅保留 ARM64 版本，删除其他）
-      - name: Build Rust SO library
+      # 步骤7：编译Rust核心SO库（仅生成libletta_lite_node.so，无JNI/AAR）
+      - name: Build Rust SO library（仅Node.js绑定）
         run: |
           cd bindings/node || { echo "❌ bindings/node not found"; exit 1; }
-          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
-          export TARGET=${{ env.TARGET_ARCH }}
-          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
-          export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
-
-          # 编译仅 ARM64 版本，不生成其他架构
-          cargo build --release --target ${{ env.TARGET_ARCH }}
+          # 明确指定仅编译Node.js绑定的SO库，禁用JNI/AAR编译
+          cargo build --release --target ${{ env.TARGET_ARCH }} --no-default-features --features "nodejs"
+          
+          # 验证SO库是否生成（仅保留Node.js绑定的SO库，无JNI）
           SO_PATH="./target/${{ env.TARGET_ARCH }}/release/libletta_lite_node.so"
-          if [ ! -f "$SO_PATH" ]; then echo "❌ SO library not found"; exit 1; fi
+          if [ ! -f "$SO_PATH" ]; then
+            echo "❌ Node.js绑定SO库未生成！当前目录产物："
+            ls -l ./target/${{ env.TARGET_ARCH }}/release/
+            exit 1
+          fi
+          echo "✅ Rust SO库编译完成：$SO_PATH"
 
-          # 复制 SO 库到 NodeCLI 目录，同时删除其他冗余文件
+          # 复制SO库到NodeCLI目录，供打包使用
           mkdir -p ../examples/node-cli/native/lib
           cp "$SO_PATH" ../examples/node-cli/native/lib/
-          # 删除 Rust 编译残留的其他文件（头文件、其他架构产物等）
-          rm -rf ./target/*/debug/ ./target/*/release/*.h ./target/*/release/*.rlib ./target/*/release/*.so.dSYM
+          echo "✅ SO库已复制到NodeCLI目录"
 
-      # 步骤8：编译 JS 代码（清理 npm 残留）
-      - name: Build JS code
+      # 步骤8：安装Node.js并编译命令窗JS代码
+      - name: Build NodeCLI（命令窗代码）
         working-directory: ./examples/node-cli
         run: |
+          # 安装Node.js 18（适配Termux）
           nvm install ${{ env.NODE_VERSION }} && nvm use ${{ env.NODE_VERSION }}
-          npm install --silent  # 静默安装，减少 log 输出
+          node -v && npm -v
+
+          # 安装NodeCLI依赖（含letta-lite Node.js绑定）
+          npm install --silent
+          # 安装打包工具
           npm install -g typescript pkg --silent
-          
-          # 生成 TS 配置
+
+          # 生成TS配置文件（确保编译成功）
           if [ ! -f "tsconfig.json" ]; then
             echo '{
               "compilerOptions": {
@@ -118,69 +131,96 @@ jobs:
               "include": ["src/**/*"], "exclude": ["node_modules"]
             }' > tsconfig.json
           fi
-          
-          tsc --project tsconfig.json --quiet  # 静默编译，减少 log
-          # 删除 npm 残留的 log、临时文件
-          rm -rf npm-debug.log yarn-debug.log yarn-error.log .npm .yarn
 
-      # 步骤9：打包 Termux 独立文件（清理冗余 SO 和 AAR）
-      - name: Package Termux executable
+          # 编译TS到JS（命令窗核心逻辑）
+          tsc --project tsconfig.json --quiet || { echo "❌ JS编译失败"; exit 1; }
+          echo "✅ NodeCLI命令窗代码编译完成"
+
+          # 验证入口文件是否存在
+          ENTRY_FILE="./dist/index.js"
+          if [ ! -f "$ENTRY_FILE" ]; then
+            echo "❌ 命令窗入口文件未找到！"
+            ls -l ./dist
+            exit 1
+          fi
+
+      # 步骤9：缝合SO库+命令窗→Termux独立文件（核心步骤）
+      - name: 缝合SO库与命令窗（生成独立文件）
         working-directory: ./examples/node-cli
         run: |
           ENTRY_FILE="./dist/index.js"
-          if [ ! -f "$ENTRY_FILE" ]; then echo "❌ Entry file not found"; exit 1; fi
+          SO_LIB="./native/lib/libletta_lite_node.so"
 
-          # 打包仅 ARM64 独立文件
+          # 验证依赖文件存在
+          if [ ! -f "$ENTRY_FILE" ] || [ ! -f "$SO_LIB" ]; then
+            echo "❌ 缝合依赖缺失！"
+            ls -l ./dist && ls -l ./native/lib
+            exit 1
+          fi
+
+          # 用pkg缝合：Node.js运行时 + JS命令窗 + Rust SO库 → 独立ELF文件
           pkg "$ENTRY_FILE" \
             --targets node${{ env.NODE_VERSION }}-android-arm64 \
             --output ${{ env.CLI_OUTPUT_NAME }} \
-            --assets ./native/lib
-          
-          # 清理 ELF 适配 Termux
+            --assets "$SO_LIB" \
+            --no-bytecode --public-packages "*" --public
+
+          # 用Termux ELF清理工具适配权限
           wget -q https://github.com/termux/termux-elf-cleaner/releases/latest/download/termux-elf-cleaner-x86_64-linux
           chmod +x termux-elf-cleaner-x86_64-linux
           ./termux-elf-cleaner-x86_64-linux --api-level ${{ env.ANDROID_API_LEVEL }} ./${{ env.CLI_OUTPUT_NAME }}
 
-          chmod +x ./${{ env.CLI_OUTPUT_NAME }}
-          # 强制删除所有冗余产物（AAR、额外 SO、头文件、log）
-          rm -rf ./native/lib/*.so ./build/ ./dist/ ./node_modules/ ./*.aar ./*.h ./*.log termux-elf-cleaner-x86_64-linux
-
-      # 步骤10：验证仅保留核心文件
-      - name: Verify pure output
-        working-directory: ./examples/node-cli
-        run: |
-          echo "当前目录文件："
-          ls -l
-          # 检查是否仅存在核心文件
-          if [ $(ls -1 | wc -l) -ne 1 ] || [ ! -f "./${{ env.CLI_OUTPUT_NAME }}" ]; then
-            echo "❌ 存在冗余文件！"
+          # 验证缝合产物
+          if [ ! -f "./${{ env.CLI_OUTPUT_NAME }}" ]; then
+            echo "❌ 缝合失败！未生成独立文件"
             exit 1
           fi
-          echo "✅ 仅保留核心文件，体积：$(du -sh ./${{ env.CLI_OUTPUT_NAME }} | awk '{print $1}')"
 
-      # 步骤11：上传仅核心文件
-      - name: Upload pure Termux executable
+          # 赋予执行权限
+          chmod +x ./${{ env.CLI_OUTPUT_NAME }}
+          echo "✅ 缝合成功！Termux独立文件生成：$(du -sh ./${{ env.CLI_OUTPUT_NAME }} | awk '{print $1}')"
+
+      # 步骤10：清理所有冗余产物（只留缝合后的独立文件）
+      - name: 清理冗余（仅保留核心文件）
+        working-directory: ./examples/node-cli
+        run: |
+          # 删除所有中间产物
+          rm -rf ./dist ./node_modules ./native ./tsconfig.json \
+            termux-elf-cleaner-x86_64-linux npm-debug.log
+
+          # 验证仅保留核心文件
+          echo "当前目录剩余文件："
+          ls -l
+          if [ $(ls -1 | wc -l) -ne 1 ] || [ ! -f "./${{ env.CLI_OUTPUT_NAME }}" ]; then
+            echo "❌ 仍存在冗余文件！"
+            exit 1
+          fi
+          echo "✅ 清理完成，仅保留Termux独立文件"
+
+      # 步骤11：上传缝合后的核心文件
+      - name: 上传Termux独立文件
         uses: actions/upload-artifact@v4
         with:
-          name: termux-letta-pure-cli
+          name: termux-letta-cli-stitch
           path: ./examples/node-cli/${{ env.CLI_OUTPUT_NAME }}
           retention-days: 30
 
-      # 步骤12：发布到 Releases（仅核心文件）
-      - name: Release pure executable
+      # 步骤12：发布到Releases（仅核心缝合文件）
+      - name: 发布Termux独立文件
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          name: Termux 纯净版可执行文件（ARM64）
-          tag_name: termux-pure-cli-${{ github.run_id }}
+          name: Termux命令窗独立文件（SO+JS缝合版）
+          tag_name: termux-stitch-cli-${{ github.run_id }}
           body: |
-            ## 纯净版！仅 1 个文件，直接运行
-            - 适配：ARM64 安卓手机（Termux 环境）
-            - 无冗余：无 AAR、无多余 SO、无 log、无 header 文件
-            - 使用：
+            ## 已完成SO库+命令窗缝合！直接运行！
+            - 适配：ARM64安卓手机（Termux环境）
+            - 内容：内置Node.js运行时 + Letta-Lite SO库 + 命令窗交互逻辑
+            - 使用步骤：
               1. 下载 ${{ env.CLI_OUTPUT_NAME }}
-              2. Termux 执行：chmod +x ./${{ env.CLI_OUTPUT_NAME }}
+              2. Termux执行：chmod +x ./${{ env.CLI_OUTPUT_NAME }}
               3. 运行：./${{ env.CLI_OUTPUT_NAME }}
+            - 无冗余：仅1个文件，无需任何额外依赖
           files: ./examples/node-cli/${{ env.CLI_OUTPUT_NAME }}
           draft: false
           prerelease: true
