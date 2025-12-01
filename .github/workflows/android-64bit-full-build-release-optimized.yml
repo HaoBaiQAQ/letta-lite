@@ -1,8 +1,20 @@
 name: 迎合脚本版：编译+发布Android 64位AAR
 on:
-  workflow_dispatch:  # 手动触发（必选，无语法问题）
+  workflow_dispatch:  # 手动触发不受路径限制，保留
   push:
     branches: [main]
+    paths:  # 仅以下文件变更时触发，排除所有 YML
+      - "scripts/build-android-64bit.sh"  # 核心编译脚本
+      - "bindings/android/**"  # Android绑定层代码
+      - "src/**"  # 项目核心源码
+      - "Cargo.toml"  # Rust依赖配置
+      - "Cargo.lock"  # 依赖锁文件
+      - "build.gradle"  # 若有全局Gradle配置，可添加
+      - "settings.gradle"  # 若有Gradle设置，可添加
+      # 明确排除所有YML文件，避免编辑其他工作流时触发
+      - "!**.yml"
+      - "!**.yaml"
+
 jobs:
   build-with-script:
     runs-on: ubuntu-latest
