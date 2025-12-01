@@ -1,8 +1,28 @@
 name: Build Android Letta-Lite
 on:
   push:
+    paths:  # 仅监听Android编译相关文件，排除所有YML
+      - "build-android.sh"  # 核心编译脚本
+      - "src/**"  # 项目核心源码
+      - "bindings/android/**"  # 若有Android绑定层，添加（无则保留注释）
+      - "Cargo.toml"  # Rust依赖配置
+      - "Cargo.lock"  # 依赖锁文件
+      - "build.gradle"  # 全局Gradle配置（无则保留注释）
+      - "settings.gradle"  # Gradle设置（无则保留注释）
+      - "!**.yml"  # 排除所有YML文件
+      - "!**.yaml"  # 排除所有YAML文件
   pull_request:
-  workflow_dispatch:  # 手动触发按钮（第四行修复：正确缩进）
+    paths:  # PR触发也应用相同路径限制
+      - "build-android.sh"
+      - "src/**"
+      - "bindings/android/**"  # 按需保留或删除
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.gradle"  # 按需保留或删除
+      - "settings.gradle"  # 按需保留或删除
+      - "!**.yml"
+      - "!**.yaml"
+  workflow_dispatch:  # 手动触发不受路径限制，保留
 
 jobs:
   build-android:
