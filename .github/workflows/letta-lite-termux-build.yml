@@ -1,0 +1,261 @@
+name: Letta-Lite Termux 控制台编译（ARM64+OpenSSL）
+on: 
+  workflow_dispatch:  # 手动触发
+  push:
+    branches: ['*']  # 所有分支推送触发
+    paths: 
+      - "examples/node-cli/**"  # 仅 NodeCLI 代码变更触发
+      - "src/**"  # Rust 核心代码变更触发
+      - "scripts/**"  # 编译脚本变更触发
+      - "bindings/node/**"  # Node 绑定目录变更触发（新增）
+  pull_request:
+
+jobs:
+  build-termux-console:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: 27.3.13750724
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      OPENSSL_VERSION: 1.1.1w
+      OPENSSL_SRC_DIR: ${{ github.workspace }}/openssl-src
+      OPENSSL_INSTALL_DIR: ${{ github.workspace }}/openssl-install
+      TARGET_ARCH: aarch64-linux-android
+      ANDROID_API_LEVEL: 24
+      NODE_VERSION: 18.20.3
+      CLI_ARTIFACT_NAME: letta-lite-termux-cli
+      CLI_OUTPUT_NAME: letta-termux-cli
+
+    steps:
+      # 步骤1：拉取代码（含子模块）
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # 步骤2：安装基础依赖（简化）
+      - name: Install base dependencies
+        run: |
+          sudo apt-get update --fix-missing
+          sudo apt-get install -y \
+            rustc cargo git make cbindgen openjdk-17-jdk \
+            wget curl unzip perl pkg-config binutils gcc g++ tree
+          java -version
+
+      # 步骤3：安装 Android NDK + SDK
+      - name: Install Android NDK + SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: "ndk;${{ env.ANDROID_NDK_VERSION }} platforms;android-${{ env.ANDROID_API_LEVEL }}"
+
+      # 步骤4：自动查找 NDK 路径
+      - name: 自动查找NDK路径
+        run: |
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -type d | grep -E "${{ env.ANDROID_NDK_VERSION }}$")
+          CLANG_ROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/lib/clang"
+          CLANG_VERSION=$(ls -1 "$CLANG_ROOT" | grep -E '^[0-9]+' | head -n 1)
+          UNWIND_LIB_PATH="$CLANG_ROOT/$CLANG_VERSION/lib/linux/aarch64"
+          
+          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
+          echo "NDK_TOOLCHAIN_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+          echo "NDK_SYSROOT=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
+          echo "UNWIND_LIB_PATH=$UNWIND_LIB_PATH" >> $GITHUB_ENV
+
+      # 步骤5：编译 OpenSSL
+      - name: 编译OpenSSL
+        run: |
+          mkdir -p "${{ env.OPENSSL_SRC_DIR }}" "${{ env.OPENSSL_INSTALL_DIR }}"
+          cd "${{ env.OPENSSL_SRC_DIR }}" || exit 1
+
+          wget -q --no-check-certificate "https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz"
+          tar -xvzf "openssl-${{ env.OPENSSL_VERSION }}.tar.gz" --strip-components=1 > /dev/null 2>&1
+
+          export CC="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX="${{ env.NDK_TOOLCHAIN_BIN }}/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ar"
+          export RANLIB="${{ env.NDK_TOOLCHAIN_BIN }}/llvm-ranlib"
+          export LD="${{ env.NDK_TOOLCHAIN_BIN }}/ld.lld"
+          export PATH="${{ env.NDK_TOOLCHAIN_BIN }}:$PATH"
+
+          ./Configure android-arm64 no-shared no-asm no-zlib no-ssl3 no-tls1 no-tls1_1 \
+            --prefix="${{ env.OPENSSL_INSTALL_DIR }}" \
+            --sysroot="${{ env.NDK_SYSROOT }}" \
+            -fPIC -march=armv8-a -O2
+
+          make -j$(nproc) > /dev/null 2>&1 || {
+            echo "❌ OpenSSL编译失败！"
+            make -j1 V=1
+            exit 1
+          }
+          make install_sw > /dev/null 2>&1 || {
+            echo "❌ OpenSSL安装失败！"
+            exit 1
+          }
+
+          if [ ! -f "${{ env.OPENSSL_INSTALL_DIR }}/lib/libssl.a" ] || [ ! -f "${{ env.OPENSSL_INSTALL_DIR }}/lib/libcrypto.a" ]; then
+            echo "❌ OpenSSL编译失败：未生成库文件"
+            exit 1
+          fi
+          echo "✅ OpenSSL编译成功"
+
+      # 步骤6：配置 Rust 环境
+      - name: 配置Rust
+        run: |
+          rustup toolchain uninstall stable || true
+          rustup target remove ${{ env.TARGET_ARCH }} || true
+          rustup component remove rust-std-${{ env.TARGET_ARCH }} || true
+
+          rustup toolchain install stable --force
+          rustup target add ${{ env.TARGET_ARCH }}
+
+          CORE_LIB_PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/${{ env.TARGET_ARCH }}/lib"
+          CORE_LIB_FILE=$(ls -1 "$CORE_LIB_PATH" | grep -E "^libcore-.*\.rlib$" | head -n 1)
+          if [ -z "$CORE_LIB_FILE" ]; then
+            echo "❌ 未找到核心库（libcore-*.rlib）！"
+            ls -l "$CORE_LIB_PATH"
+            exit 1
+          fi
+          echo "✅ 核心库验证通过"
+
+      # 步骤7：编译 Rust 核心 SO 库（修复逻辑）
+      - name: 编译 Rust 核心 SO 库
+        run: |
+          # 进入 Node.js 绑定目录
+          cd bindings/node || { echo "❌ 未找到 bindings/node 目录"; exit 1; }
+          export NDK_PATH=${{ env.NDK_PATH }}
+          export NDK_TOOLCHAIN_BIN=${{ env.NDK_TOOLCHAIN_BIN }}
+          export NDK_SYSROOT=${{ env.NDK_SYSROOT }}
+          export OPENSSL_DIR=${{ env.OPENSSL_INSTALL_DIR }}
+          export TARGET=${{ env.TARGET_ARCH }}
+          export ANDROID_API_LEVEL=${{ env.ANDROID_API_LEVEL }}
+          
+          # 编译 SO 库
+          cargo build --release --target ${{ env.TARGET_ARCH }}
+          
+          # 验证 SO 库
+          SO_PATH="./target/${{ env.TARGET_ARCH }}/release/libletta_lite_node.so"
+          if [ ! -f "$SO_PATH" ]; then
+            echo "❌ SO 库未生成，检查目录结构"
+            ls -l ./target/${{ env.TARGET_ARCH }}/release/
+            exit 1
+          fi
+          
+          # 复制到 NodeCLI 目录
+          mkdir -p ../examples/node-cli/native/lib
+          cp "$SO_PATH" ../examples/node-cli/native/lib/
+          echo "✅ Rust 核心 SO 库编译完成"
+
+      # 步骤8：安装 Node.js
+      - name: 安装 Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ./examples/node-cli/package-lock.json
+
+      # 步骤9：生成 TS 配置文件（新增）
+      - name: 生成 TS 配置文件
+        working-directory: ./examples/node-cli
+        run: |
+          if [ ! -f "tsconfig.json" ]; then
+            echo '{
+              "compilerOptions": {
+                "target": "ES2020",
+                "module": "CommonJS",
+                "outDir": "./dist",
+                "rootDir": "./src",
+                "strict": true,
+                "esModuleInterop": true,
+                "skipLibCheck": true,
+                "forceConsistentCasingInFileNames": true
+              },
+              "include": ["src/**/*"],
+              "exclude": ["node_modules"]
+            }' > tsconfig.json
+            echo "✅ 自动生成 tsconfig.json"
+          fi
+
+      # 步骤10：编译 NodeCLI 代码
+      - name: 编译 NodeCLI 代码
+        working-directory: ./examples/node-cli
+        run: |
+          npm install
+          npm install -g typescript pkg
+          tsc --project tsconfig.json
+          echo "✅ NodeCLI 代码编译完成"
+
+      # 步骤11：打包为 Termux 独立可执行文件（修复入口）
+      - name: 打包 Termux 可执行文件
+        working-directory: ./examples/node-cli
+        run: |
+          # 明确指定入口文件（假设编译后为 dist/index.js）
+          ENTRY_FILE="./dist/index.js"
+          if [ ! -f "$ENTRY_FILE" ]; then
+            echo "❌ 入口文件未找到，检查 TS 编译输出"
+            ls -l ./dist
+            exit 1
+          fi
+          
+          pkg "$ENTRY_FILE" \
+            --targets node${{ env.NODE_VERSION }}-android-arm64 \
+            --output ${{ env.CLI_OUTPUT_NAME }} \
+            --assets ./native/lib
+          
+          if [ ! -f "./${{ env.CLI_OUTPUT_NAME }}" ]; then
+            echo "❌ Termux 可执行文件打包失败"
+            exit 1
+          fi
+          chmod +x ./${{ env.CLI_OUTPUT_NAME }}
+          echo "✅ Termux 可执行文件打包完成"
+          ls -l ./${{ env.CLI_OUTPUT_NAME }}
+
+      # 步骤12：清理 ELF 产物（新增，适配 Termux）
+      - name: 清理 ELF 产物
+        run: |
+          wget https://github.com/termux/termux-elf-cleaner/releases/latest/download/termux-elf-cleaner-x86_64-linux
+          chmod +x termux-elf-cleaner-x86_64-linux
+          ./termux-elf-cleaner-x86_64-linux --api-level ${{ env.ANDROID_API_LEVEL }} ./examples/node-cli/${{ env.CLI_OUTPUT_NAME }}
+          echo "✅ ELF 产物清理完成"
+
+      # 步骤13：整理产物
+      - name: 整理产物
+        run: |
+          mkdir -p ./release-termux
+          cp ./examples/node-cli/${{ env.CLI_OUTPUT_NAME }} ./release-termux/
+          echo "产物体积：$(du -sh ./release-termux/${{ env.CLI_OUTPUT_NAME }} | awk '{print $1}')"
+          echo "✅ 产物整理完成"
+          ls -l ./release-termux/
+
+      # 步骤14：上传工作流产物
+      - name: 上传工作流产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CLI_ARTIFACT_NAME }}
+          path: ./release-termux/*
+          retention-days: 14
+
+      # 步骤15：自动发布到 GitHub Releases
+      - name: 自动创建 GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Termux 控制台开发版-${{ github.run_id }}
+          tag_name: "termux-dev-${{ github.run_id }}"
+          body: |
+            ## Termux 控制台可执行文件（直接运行）
+            - 适配架构：arm64-v8a（主流安卓手机）
+            - 依赖：内置 Node.js 18.20.3 + OpenSSL 1.1.1w + Rust 核心
+            - 无需额外安装任何依赖，独立运行
+            
+            ### Termux 使用步骤：
+            1. 下载 ${{ env.CLI_OUTPUT_NAME }} 文件（复制 Release 中的下载链接）
+            2. Termux 中执行：wget 下载链接
+            3. 赋予权限：chmod +x ${{ env.CLI_OUTPUT_NAME }}
+            4. 运行：./${{ env.CLI_OUTPUT_NAME }}
+          files: ./release-termux/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
