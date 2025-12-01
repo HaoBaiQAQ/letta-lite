@@ -1,9 +1,24 @@
 name: Letta-Lite Android (Tianji1200 + OpenSSL)
 on: 
-  workflow_dispatch:  # 手动触发时也释放
+  workflow_dispatch:  # 手动触发不受路径限制，保留
   push:
-    branches: ['*']  # 所有分支推送（改源码）都触发，不限制main/非main
+    branches: ['*']  # 保留所有分支触发
+    paths:  # 仅以下文件变更时触发，排除其他 YML
+      - ".github/workflows/本工作流文件名.yml"  # 替换为当前工作流的实际文件名（必填）
+      - "scripts/build-android-64bit-minimal.sh"  # 编译脚本
+      - "src/**"  # Rust 核心源码
+      - "bindings/android/**"  # Android 绑定层（若有）
+      - "Cargo.toml"  # Rust 依赖配置
+      - "Cargo.lock"  # 依赖锁文件
   pull_request:
+    branches: ['*']
+    paths:  # PR 也只监听相同文件范围
+      - ".github/workflows/本工作流文件名.yml"  # 替换为当前工作流的实际文件名（必填）
+      - "scripts/build-android-64bit-minimal.sh"
+      - "src/**"
+      - "bindings/android/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 jobs:
   build:
